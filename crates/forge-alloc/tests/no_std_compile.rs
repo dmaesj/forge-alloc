@@ -1,4 +1,4 @@
-//! Compile-only smoke test for `forge-layout` under `--no-default-features`.
+//! Compile-only smoke test for the `layout` module under `--no-default-features`.
 //! Under no_std, `BumpArena`, `Slab`, `WithFallback`, and `SharedBumpArena`
 //! (when atomics are available) must compile and be nameable.
 

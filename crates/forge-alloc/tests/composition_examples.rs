@@ -423,7 +423,7 @@ fn poison_persists_in_user_region_past_freelink_with_quarantine_wrap() {
     // fully-poisoned bytes (Slab's FreeLink hasn't been written yet).
     //
     // This pins the documented `PoisonOnFree<Quarantine<Slab>>` security
-    // property from `crates/forge-hardening/src/poison.rs` — the "maximum
+    // property from `crates/forge-alloc/src/hardening/poison.rs` — the "maximum
     // poison persistence" recipe.
     let pof: PoisonOnFree<Quarantine<Slab<u64, _>, 4>> = PoisonOnFree::new(Quarantine::new(
         Slab::<u64, _>::new(8, MmapBacked::new(4 * 1024).unwrap()).unwrap(),

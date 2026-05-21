@@ -4,7 +4,7 @@
 //! # CI gate — REQUIRED
 //!
 //! Running `cargo test --all-features` does **not** exercise the no_std
-//! surface: it builds `forge-core` with the `std` feature enabled, so
+//! surface: it builds `forge-alloc-core` with the `std` feature enabled, so
 //! any accidental `use std::…` introduced into `forge_alloc_core`'s public
 //! surface compiles fine and goes unnoticed.
 //!
@@ -12,8 +12,8 @@
 //! run, to actually validate the no_std surface:
 //!
 //! ```sh
-//! cargo check -p forge-core --no-default-features --tests
-//! cargo check -p forge-layout --no-default-features --tests
+//! cargo check -p forge-alloc-core --no-default-features --lib
+//! cargo check -p forge-alloc --no-default-features --lib
 //! ```
 //!
 //! These commands verify that the surface compiles when `std` is not
@@ -42,7 +42,7 @@ fn _nzl_for_type() -> Option<NonZeroLayout> {
     NonZeroLayout::for_type::<u64>()
 }
 
-// Type erasure check: ensure a trait object over a forge-core trait is
+// Type erasure check: ensure a trait object over a forge-alloc-core trait is
 // nameable under no_std (uses Deallocator as a simple object-safe example).
 fn _accepts_deallocator(_d: &dyn Deallocator) {}
 

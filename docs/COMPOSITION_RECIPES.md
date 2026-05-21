@@ -18,6 +18,7 @@ is for *callers* assembling the pieces.
 - [NUMA-local + huge-page-aligned arena](#numa-local--huge-page-aligned-arena)
 - [Cross-thread typed allocator with adaptive batching](#cross-thread-typed-allocator-with-adaptive-batching)
 - [Generational-handle slab (ABA-safe)](#generational-handle-slab-aba-safe)
+- [Fault injection for OOM-path testing](#fault-injection-for-oom-path-testing)
 
 ---
 
@@ -154,7 +155,7 @@ construction and returns `Err(AllocError)` on overlap.
 Overlapping ranges with the unchecked `new` silently misroute
 secondary-issued pointers through `primary.deallocate`, producing
 a freelist corruption that's hard to diagnose after the fact. The
-default secondary `forge_backing::System` is not `FixedRange`, so the
+default secondary `System` is not `FixedRange`, so the
 common `WithFallback<_, System>` wiring stays on `new`.
 
 ---
@@ -262,3 +263,37 @@ distinguish "still valid" from "recycled into a different value".
 per-slab. Don't share a handle across two `GenerationalSlab`
 instances of the same type — the second one's generation counter
 is independent.
+
+---
+
+## Fault injection for OOM-path testing
+
+```rust
+// Test-only: force the WithFallback secondary path on every request.
+type ChaosTest =
+    WithFallback<Faulty<BumpArena<MmapBacked>, AlwaysFail>, System>;
+```
+
+`Faulty<I, P>` wraps any allocator and consults an `AllocFaultPolicy`
+before each `allocate`, returning `AllocError` when the policy votes to
+fail. The inner allocator is never touched on a faulted request, so an
+injected failure is observationally identical to a genuine OOM. This
+turns the normally-unreachable out-of-memory branch of every allocator
+and composition into something a unit test, a `proptest` case, or a
+fuzz target can drive deterministically. Built-in policies: `NeverFail`,
+`AlwaysFail`, `FailAfter`, `FailEveryNth`, `FailOnSize`.
+
+The example pairs `Faulty` with the *Bounded heap with overflow
+fallback* recipe above: an `AlwaysFail` primary forces every request
+down the `System` fallback, so that branch (almost never hit in a real
+run) gets exercised on purpose.
+
+**Use when**: testing the error paths that production runs rarely
+reach, such as `AllocError` handling, `WithFallback` secondary routing,
+and graceful degradation.
+
+**Pitfalls**: test and debug builds only. A `Faulty` left in a shipped
+allocator stack is an allocator that fails for no reason. Place it just
+above the allocator whose OOM you want to simulate and below any
+observability wrappers, e.g. `Statistics<Faulty<Slab<T>>>`, so the
+injected failure is counted exactly as a real one would be.

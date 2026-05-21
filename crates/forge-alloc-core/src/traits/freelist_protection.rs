@@ -359,7 +359,7 @@ impl fmt::Debug for SipHashMAC {
 ///
 /// ```toml
 /// [dependencies]
-/// forge-core = { version = "...", features = ["pac-stub"] }
+/// forge-alloc-core = { version = "...", features = ["pac-stub"] }
 /// ```
 #[cfg(all(target_arch = "aarch64", feature = "pac-stub"))]
 #[doc(hidden)]

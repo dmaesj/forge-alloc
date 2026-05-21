@@ -117,20 +117,20 @@ impl WatermarkHandler for LogHandler {
         // allocation > 42 MiB.
         let pct = (event.allocated_bytes as u128) * 100 / (event.capacity_bytes.max(1) as u128);
         eprintln!(
-            "[forge-hardening] watermark WARN: {}/{} bytes ({}%)",
+            "[forge-alloc] watermark WARN: {}/{} bytes ({}%)",
             event.allocated_bytes, event.capacity_bytes, pct,
         );
     }
     fn on_critical(&self, event: WatermarkEvent) {
         let pct = (event.allocated_bytes as u128) * 100 / (event.capacity_bytes.max(1) as u128);
         eprintln!(
-            "[forge-hardening] watermark CRITICAL: {}/{} bytes ({}%)",
+            "[forge-alloc] watermark CRITICAL: {}/{} bytes ({}%)",
             event.allocated_bytes, event.capacity_bytes, pct,
         );
     }
     fn on_oom(&self, event: WatermarkEvent) {
         eprintln!(
-            "[forge-hardening] watermark OOM: requested {:?}; {}/{} bytes in use",
+            "[forge-alloc] watermark OOM: requested {:?}; {}/{} bytes in use",
             event.requested_layout, event.allocated_bytes, event.capacity_bytes,
         );
     }

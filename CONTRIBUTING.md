@@ -8,30 +8,32 @@ change reviewed and merged.
 
 ```
 crates/
-├── forge-core/       # Layer 0 — traits, NonZeroLayout, StdCompat
-├── forge-backing/    # Layer 1 — InlineBacked, MmapBacked, System
-├── forge-layout/     # Layer 2 — BumpArena, Slab, SizeClassed, etc.
-├── forge-hardening/  # Layer 3 — Canary, CacheJitter, Quarantine, etc.
-├── forge-alloc/      # meta-crate — re-exports + HardenedSlab alias
-├── forge-bench/      # Criterion benchmarks (workspace-internal)
-└── forge-fuzz/       # cargo-fuzz targets (nightly only, workspace-excluded)
+├── forge-alloc-core/   # Layer 0 — traits, NonZeroLayout, StdCompat
+├── forge-alloc/        # Layers 1-3, as src/ modules:
+│   ├── src/backing/    #   Layer 1 — InlineBacked, MmapBacked, System
+│   ├── src/layout/     #   Layer 2 — BumpArena, Slab, SizeClassed, etc.
+│   └── src/hardening/  #   Layer 3 — Canary, CacheJitter, Quarantine, etc.
+├── forge-bench/        # Criterion benchmarks (workspace-internal)
+└── forge-fuzz/         # cargo-fuzz targets (nightly only, workspace-excluded)
 ```
 
-The layer boundary tells you which crate a new primitive belongs in:
+The layer boundary tells you where a new primitive belongs:
 
-- **Layer 0 / forge-core** — anything that's a trait, a layout type, or a
-  feature flag that fans out to the layered crates.
-- **Layer 1 / forge-backing** — primitives that *produce* memory. Each
-  Layer-1 primitive answers "where do these bytes come from?" — OS
-  mapping (`MmapBacked`), inline buffer (`InlineBacked`), global heap
-  (`System`).
-- **Layer 2 / forge-layout** — primitives that *organize* memory served
-  by a backing. Bump cursor, freelist, fallback router, etc. They
-  consume a `B: Allocator` (typically a backing) and impose structure.
-- **Layer 3 / forge-hardening** — wrappers that decorate any allocator
-  with one specific behaviour: canaries, poison-on-free, statistics,
-  guard pages, NUMA binding, cache jitter, etc. (`Faulty`, the
-  test-only fault-injection wrapper, also lives here.)
+- **Layer 0 / `forge-alloc-core`** — anything that's a trait, the
+  `NonZeroLayout` type, or a feature flag that fans out to the layers.
+- **Layer 1 / `forge-alloc` `src/backing/`** — primitives that
+  *produce* memory. Each Layer-1 primitive answers "where do these
+  bytes come from?": OS mapping (`MmapBacked`), inline buffer
+  (`InlineBacked`), global heap (`System`).
+- **Layer 2 / `forge-alloc` `src/layout/`** — primitives that
+  *organize* memory served by a backing. Bump cursor, freelist,
+  fallback router, etc. They consume a `B: Allocator` (typically a
+  backing) and impose structure.
+- **Layer 3 / `forge-alloc` `src/hardening/`** — wrappers that
+  decorate any allocator with one specific behaviour: canaries,
+  poison-on-free, statistics, guard pages, NUMA binding, cache jitter,
+  etc. (`Faulty`, the test-only fault-injection wrapper, also lives
+  here.)
 
 Wrappers are *transparent* — they implement `Allocator`/`Deallocator`
 (and ideally `FixedRange` / `OsBacked` when applicable) by forwarding
@@ -40,9 +42,10 @@ type-level composition makes the cost visible and pay-for-what-you-use.
 
 ## Adding a new primitive
 
-1. **Pick the layer.** A wrapper belongs in `forge-hardening`. A new
-   allocation strategy that consumes a backing belongs in `forge-layout`.
-   A new source of memory belongs in `forge-backing`.
+1. **Pick the layer.** A wrapper belongs in `src/hardening/`. A new
+   allocation strategy that consumes a backing belongs in `src/layout/`.
+   A new source of memory belongs in `src/backing/`. (All three are
+   modules of the `forge-alloc` crate.)
 2. **Decide the public surface.** Implement `Allocator` and
    `Deallocator`. If the primitive's address range is fixed at
    construction, implement `FixedRange` too — this enables routing via
@@ -53,14 +56,14 @@ type-level composition makes the cost visible and pay-for-what-you-use.
    any `unsafe trait` impls.
 4. **Add unit tests** that exercise the happy path, the exhaustion
    path, edge alignments, and any size/alignment composition limits.
-5. **Add proptest cases** in `crates/forge-layout/tests/proptest_correctness.rs`
-   (or the appropriate per-crate test file) for the invariants the
+5. **Add proptest cases** in `crates/forge-alloc/tests/proptest_correctness.rs`
+   (or the appropriate per-area test file) for the invariants the
    primitive promises.
 6. **If the primitive has `unsafe` blocks**, add `#[cfg(kani)]` proof
    harnesses inside the source file under a `mod kani_proofs` block.
-   See `crates/forge-layout/src/bump.rs` for the pattern.
-7. **Re-export from the meta-crate.** Add to
-   `crates/forge-alloc/src/lib.rs` so `forge_alloc::*` users see it.
+   See `crates/forge-alloc/src/layout/bump.rs` for the pattern.
+7. **Re-export it.** Add to `crates/forge-alloc/src/lib.rs` so
+   `forge_alloc::*` users see it.
 8. **Update `CHANGELOG.md`** under `[Unreleased]`.
 
 ## Running the test suite
@@ -73,17 +76,16 @@ cargo test --workspace --all-features
 cargo clippy --workspace --all-features --all-targets -- -D warnings
 cargo doc --workspace --all-features --no-deps  # RUSTDOCFLAGS=-D warnings in CI
 
-# no_std surface (each crate that has a `std` feature):
-cargo check -p forge-core --no-default-features --tests
-cargo check -p forge-layout --no-default-features --tests
-cargo check -p forge-hardening --no-default-features --tests
+# no_std surface (library crates, --lib only):
+cargo check -p forge-alloc-core --no-default-features --lib
+cargo check -p forge-alloc --no-default-features --lib
 
 # MIRI (nightly only — validates unsafe blocks):
-cargo +nightly miri test -p forge-core --all-features
-cargo +nightly miri test -p forge-layout --no-default-features
+cargo +nightly miri test -p forge-alloc-core --all-features
+cargo +nightly miri test -p forge-alloc --test miri_targets --test nrvo_defeat
 
 # Kani (nightly only — proves bounded properties on unsafe code):
-cargo kani -p forge-layout
+cargo kani -p forge-alloc
 ```
 
 The GitHub Actions workflow at `.github/workflows/ci.yml` runs the

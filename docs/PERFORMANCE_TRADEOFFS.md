@@ -186,7 +186,7 @@ unaffected and still produces the wall-clock HTML reports above.
   single-threaded. `SharedBumpArena`'s CAS loop and `SlabOwner` +
   `SlabRemote`'s remote-dealloc queue have separate concurrency-
   specific characteristics that would need a contention-spectrum bench
-  to surface. ([`crates/forge-layout/tests/loom_concurrency.rs`](../crates/forge-layout/tests/loom_concurrency.rs)
+  to surface. ([`crates/forge-alloc/tests/loom_concurrency.rs`](../crates/forge-alloc/tests/loom_concurrency.rs)
   pins their *correctness* under permutation; perf under contention is
   a future bench.)
 

@@ -16,13 +16,13 @@ cargo +nightly fuzz run fuzz_with_fallback
 ```
 
 Each target consumes arbitrary bytes as a sequence of allocation operations
-and checks the invariants from spec §13 (no overlap, alignment, size).
+and checks the core allocator invariants (no overlap, alignment, size).
 
-A failing case is minimized into `crates/forge-fuzz/fuzz/artifacts/<target>/`
+A failing case is minimized into `crates/forge-fuzz/artifacts/<target>/`
 and can be replayed for debugging:
 
 ```bash
-cargo +nightly fuzz run fuzz_bump_arena fuzz/artifacts/fuzz_bump_arena/crash-<hash>
+cargo +nightly fuzz run fuzz_bump_arena artifacts/fuzz_bump_arena/crash-<hash>
 ```
 
 CI should run each target for a fixed wall-clock budget (e.g. 5 minutes per

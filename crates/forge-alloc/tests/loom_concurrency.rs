@@ -1,4 +1,4 @@
-//! Loom concurrency models for `forge-layout`.
+//! Loom concurrency models for the `layout` module.
 //!
 //! Miri is single-threaded and catches Stacked Borrows + raw UB on one
 //! interleaving. Loom permutes the legal interleavings of a
@@ -35,7 +35,7 @@
 // ===========================================================================
 //
 // Pinned production source: `SharedBumpArena::allocate` (the CAS loop)
-// in crates/forge-layout/src/shared_bump.rs
+// in crates/forge-alloc/src/layout/shared_bump.rs
 //
 // Algorithm:
 //   loop {
@@ -161,8 +161,8 @@ mod cas_bump {
 // ===========================================================================
 //
 // Pinned production source:
-//   crates/forge-layout/src/slab_owner.rs  (SlabOwner::drop)
-//   crates/forge-layout/src/slab_owner.rs  (SlabRemote::try_deallocate)
+//   crates/forge-alloc/src/layout/slab_owner.rs  (SlabOwner::drop)
+//   crates/forge-alloc/src/layout/slab_owner.rs  (SlabRemote::try_deallocate)
 //
 // Algorithm:
 //   SlabOwner::drop {
@@ -357,7 +357,7 @@ mod slab_owner_close {
 // Model 3 — ExtendableSlab.first_open_hint
 // ===========================================================================
 //
-// Pinned production source: crates/forge-layout/src/extendable_slab.rs
+// Pinned production source: crates/forge-alloc/src/layout/extendable_slab.rs
 //   ExtendableSlab::deallocate  (first_open_hint / fetch_min)
 //   ExtendableSlab::allocate    (first_open_hint / fetch_max)
 //

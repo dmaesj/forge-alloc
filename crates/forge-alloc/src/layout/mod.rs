@@ -1,7 +1,7 @@
-//! # forge-layout
+//! # layout
 //!
 //! Layer 2 layout primitives for the forge-alloc family. These consume any
-//! [`forge_alloc_core::Allocator`] backing (typically from `forge-backing`) and impose
+//! [`forge_alloc_core::Allocator`] backing (typically from the `backing` module) and impose
 //! their own structure on the memory.
 //!
 //! Ships:

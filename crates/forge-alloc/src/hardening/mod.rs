@@ -1,4 +1,4 @@
-//! # forge-hardening
+//! # hardening
 //!
 //! Layer 3 hardening wrappers for the forge-alloc family. Each wrapper
 //! decorates an inner [`forge_alloc_core::Allocator`] with one specific protection or

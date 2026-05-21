@@ -1,4 +1,4 @@
-//! # forge-core
+//! # forge-alloc-core
 //!
 //! Core trait contracts and primitive layout type for the `forge-alloc`
 //! family of composable allocator crates.
@@ -11,10 +11,10 @@
 //! - [`OsBacked`] / [`FixedRange`] — structural traits for backings and ranges
 //! - [`FreelistProtection`] (+ [`NoProtection`], optional `SipHashMAC` / `PacMAC`)
 //! - [`AllocFaultPolicy`] — the OOM fault-injection seam for the
-//!   `forge-hardening` `Faulty` wrapper (+ built-in policies)
+//!   `hardening` `Faulty` wrapper (+ built-in policies)
 //!
-//! Higher layers (`forge-backing`, `forge-layout`, `forge-hardening`) consume these
-//! traits to produce primitive types; the `forge-alloc` meta-crate re-exports
+//! Higher layers (the `backing`, `layout`, `hardening` modules) consume these
+//! traits to produce primitive types; the `forge-alloc` crate re-exports
 //! everything for convenience.
 
 #![cfg_attr(not(feature = "std"), no_std)]

@@ -37,7 +37,7 @@ use forge_alloc_core::{AllocError, Allocator, Deallocator, FixedRange, NonZeroLa
 /// - If `secondary.contains(ptr)` would also return `true` for a primary-issued
 ///   pointer (i.e. their address ranges overlap), deallocation routing is
 ///   incorrect and behavior is UB. In practice the secondary is usually
-///   [`crate::backing::System`](https://docs.rs/forge-backing) which doesn't implement
+///   [`crate::backing::System`](https://docs.rs/forge-alloc) which doesn't implement
 ///   `FixedRange`, so this concern is hypothetical.
 /// - Calling `deallocate` with a pointer that belongs to neither allocator
 ///   is UB in release builds; debug builds gain a tracking check only when
@@ -85,7 +85,7 @@ impl<P, S> WithFallback<P, S> {
     /// This is the const-fn path; no runtime range check is performed.
     /// Use this when the secondary doesn't implement
     /// [`FixedRange`](forge_alloc_core::FixedRange) (the common case — the
-    /// canonical secondary is [`crate::backing::System`](https://docs.rs/forge-backing),
+    /// canonical secondary is [`crate::backing::System`](https://docs.rs/forge-alloc),
     /// which is not `FixedRange`). For that wiring, deallocation
     /// routing is unambiguous: any pointer outside the primary's
     /// range goes to the secondary, and `System` accepts any pointer.
@@ -130,7 +130,7 @@ impl<P: FixedRange, S: FixedRange> WithFallback<P, S> {
     ///
     /// Use this constructor whenever both halves implement
     /// `FixedRange`. The default secondary
-    /// [`crate::backing::System`](https://docs.rs/forge-backing) does not
+    /// [`crate::backing::System`](https://docs.rs/forge-alloc) does not
     /// implement `FixedRange`, so callers wiring `System` as the
     /// fallback continue to use [`WithFallback::new`] — `System`
     /// accepts any pointer, so routing is unambiguous there.

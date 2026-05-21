@@ -8,7 +8,7 @@
 //!
 //! This module defines the *policy* half of a fix: a trait that decides,
 //! per request, whether an allocation should be forced to fail. The
-//! `forge-hardening` `Faulty<I, P>` wrapper is the *mechanism* half — it
+//! `hardening` module's `Faulty<I, P>` wrapper is the *mechanism* half — it
 //! consults a `P: AllocFaultPolicy` and synthesises an `AllocError`
 //! when the policy says so, turning those OOM paths into something a
 //! unit test, a `proptest` case, a `cargo fuzz` target, a MIRI run, or
@@ -20,7 +20,7 @@ use core::sync::atomic::{AtomicUsize, Ordering};
 /// Decides whether a pending allocation request should be forced to
 /// fail.
 ///
-/// A `forge-hardening` `Faulty<I, P>` wrapper consults a
+/// A `hardening` module `Faulty<I, P>` wrapper consults a
 /// `P: AllocFaultPolicy` on the allocation path and, when
 /// [`should_fail`](Self::should_fail) returns `true`, returns
 /// [`AllocError`](crate::AllocError) instead of forwarding to the inner
@@ -28,13 +28,13 @@ use core::sync::atomic::{AtomicUsize, Ordering};
 ///
 /// # The seam
 ///
-/// This trait lives in `forge-core` and is intentionally
+/// This trait lives in `forge-alloc-core` and is intentionally
 /// **dependency-free**: its single method takes only a [`NonZeroLayout`]
-/// (a `forge-core` type) and returns `bool`. Nothing from a
+/// (a `forge-alloc-core` type) and returns `bool`. Nothing from a
 /// determinism / replay layer crosses it. That keeps the dependency
 /// arrow pointing one way — a *seeded, replayable* policy is
-/// implemented downstream (it depends on `forge-core` to obtain this
-/// trait), and neither `forge-core` nor `forge-hardening` ever gains a
+/// implemented downstream (it depends on `forge-alloc-core` to obtain this
+/// trait), and neither `forge-alloc-core` nor the `hardening` module ever gains a
 /// dependency on that layer. The forge-* crates ship only the trivial
 /// built-in policies in this module ([`NeverFail`], [`AlwaysFail`],
 /// [`FailAfter`], [`FailEveryNth`], [`FailOnSize`]); anything

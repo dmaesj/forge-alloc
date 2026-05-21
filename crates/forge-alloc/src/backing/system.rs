@@ -43,7 +43,7 @@ impl System {
 // `#[global_allocator]`, `Global` resolves to that allocator. Either way the
 // spec's "fall back to the OS heap" contract is honoured.
 //
-// Conversion at the boundary: forge-core takes `NonZeroLayout`, the std
+// Conversion at the boundary: forge-alloc-core takes `NonZeroLayout`, the std
 // allocator API takes `core::alloc::Layout`. `NonZeroLayout::to_layout()` is
 // infallible.
 

@@ -1,14 +1,14 @@
-//! # forge-backing
+//! # backing
 //!
 //! Layer 1 backing primitives for the forge-alloc family.
 //!
 //! Backings are the source of memory that higher-layer allocators
-//! (`forge-layout`'s `BumpArena`, `Slab`, etc.) sub-allocate from. Each backing
+//! (the `layout` module's `BumpArena`, `Slab`, etc.) sub-allocate from. Each backing
 //! exposes its entire region as an allocator that hands out byte-aligned
 //! chunks bump-style; layout primitives layered on top impose their own
 //! structure on what they receive.
 //!
-//! This crate ships:
+//! This module ships:
 //!
 //! - [`InlineBacked<N>`] — fixed-size inline storage, `no_std`-friendly.
 //! - [`MmapBacked`] — OS-mapped anonymous region (`mmap` / `VirtualAlloc`),

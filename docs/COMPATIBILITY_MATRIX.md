@@ -30,7 +30,7 @@ the misuse is itself a test failure.
 ### 1. `Slab<(), B>` — ZST T
 
 - **Status**: CT
-- **Mechanism**: `Slab::ASSERT_T_NON_ZST` in [`crates/forge-layout/src/slab.rs`](../crates/forge-layout/src/slab.rs) — a const-time `assert!(size_of::<T>() != 0)` that fails monomorphisation when T is a ZST. Force-evaluated inside `Slab::with_protection` so the build halts before any test runs.
+- **Mechanism**: `Slab::ASSERT_T_NON_ZST` in [`crates/forge-alloc/src/layout/slab.rs`](../crates/forge-alloc/src/layout/slab.rs) — a const-time `assert!(size_of::<T>() != 0)` that fails monomorphisation when T is a ZST. Force-evaluated inside `Slab::with_protection` so the build halts before any test runs.
 - **Why**: `Slab` issues one `block_stride` slot per `T`. A ZST has zero size, so capacity and freelist arithmetic collapse to nonsense.
 - **Instead**: if you need a "tag" allocator with no payload, use `BumpArena<InlineBacked<N>>` and allocate `[u8; 1]` slots — the type system still tracks count, and the wasted byte is the cost of explicitness.
 - **Pinned by**: `compile_fail` doctest in `slab.rs`.
@@ -38,7 +38,7 @@ the misuse is itself a test failure.
 ### 2. `InlineBacked<N>` where `N % align_of::<usize>() != 0`
 
 - **Status**: CT
-- **Mechanism**: `InlineBacked::ASSERT_N_ALIGNED` const in [`crates/forge-backing/src/inline.rs`](../crates/forge-backing/src/inline.rs).
+- **Mechanism**: `InlineBacked::ASSERT_N_ALIGNED` const in [`crates/forge-alloc/src/backing/inline.rs`](../crates/forge-alloc/src/backing/inline.rs).
 - **Why**: `InlineBacked<N>` is `#[repr(align(16))]` and stores `[u8; N]`. The storage's *end* must also be aligned for slot strides to land correctly; that requires N to be a multiple of the alignment.
 - **Instead**: pick `N` as a multiple of 16 — typical choices are 256, 1024, 4096, 65536.
 - **Pinned by**: `compile_fail` doctest in `inline.rs`.
@@ -46,7 +46,7 @@ the misuse is itself a test failure.
 ### 3. `SlabOwner<T, B>: Sync`
 
 - **Status**: CE
-- **Mechanism**: `SlabOwner` carries `_not_sync: PhantomData<Cell<()>>` ([`crates/forge-layout/src/slab_owner.rs`](../crates/forge-layout/src/slab_owner.rs)) — auto-trait `Sync` is unimplementable. Any code that tries `assert_sync::<SlabOwner<_, _>>()` fails to compile.
+- **Mechanism**: `SlabOwner` carries `_not_sync: PhantomData<Cell<()>>` ([`crates/forge-alloc/src/layout/slab_owner.rs`](../crates/forge-alloc/src/layout/slab_owner.rs)) — auto-trait `Sync` is unimplementable. Any code that tries `assert_sync::<SlabOwner<_, _>>()` fails to compile.
 - **Why**: `SlabOwner` is the *owner-thread* half of the cross-thread typed allocator. The owner alone touches the inner `Slab`; workers communicate via `SlabRemote::deallocate`. Making the owner `Sync` would invite multi-thread allocation, which the !Sync `Slab` underneath does not support.
 - **Instead**: clone the `SlabRemote` (which IS `Send + Sync`) and ship it to workers.
 - **Pinned by**: `compile_fail` doctest in `slab_owner.rs`.
@@ -207,13 +207,13 @@ which we won't do mid-v0.1.
 
 ### 24. Bare-metal targets without native 64-bit atomics — RESOLVED in v0.1
 
-- **Today**: all observability counters in `forge-layout`
-  (`Slab::corruption_events`, `ExtendableSlab::routing_failures`,
-  `UntypedSlab::corruption_events`) and `forge-hardening`
+- **Today**: all observability counters in `forge-alloc`'s `layout`
+  module (`Slab::corruption_events`, `ExtendableSlab::routing_failures`,
+  and `SizeClassed`'s per-class counters) and its `hardening` module
   (every `AllocStats` field — `total_allocations`, `bytes_allocated`,
   `corruption_events`, etc.) use `AtomicUsize`, not `AtomicU64`. The
-  cross-compile CI matrix exercises `forge-core`, `forge-layout`, and
-  `forge-hardening` against `thumbv7em-none-eabihf` (Cortex-M4, 32-bit
+  cross-compile CI matrix exercises `forge-alloc-core` and `forge-alloc`
+  against `thumbv7em-none-eabihf` (Cortex-M4, 32-bit
   atomics only) and `wasm32-unknown-unknown` (no atomics by default —
   works because `AtomicUsize` lowers to non-atomic stores on
   single-threaded wasm).

@@ -38,6 +38,8 @@ Inside `forge-alloc` the three implementation layers are modules —
 `HugePageAligned`, `NumaLocal`, `SplitMetadata`, plus `Faulty` for
 test-only fault injection).
 
+One wrapper is for testing rather than production: `Faulty` injects allocation failures on a policy you pick, so the out-of-memory and fallback paths your code rarely exercises can be driven deterministically in tests. See the [composition recipes](https://github.com/dmaesj/forge-alloc/blob/main/docs/COMPOSITION_RECIPES.md) for wiring.
+
 ## Status
 
 All Layer 0–3 primitives are implemented and tested — the backings,

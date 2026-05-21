@@ -552,7 +552,7 @@ unsafe fn os_release_pages(ptr: NonNull<u8>, size: usize) {
     }
 }
 
-/// Map forge-core's `ProtectFlags` to a Unix `mprotect` `prot` argument.
+/// Map forge-alloc-core's `ProtectFlags` to a Unix `mprotect` `prot` argument.
 ///
 /// Unlike Windows, the Unix ABI exposes each protection bit independently
 /// (`PROT_READ`, `PROT_WRITE`, `PROT_EXEC`), so every one of the eight
@@ -605,7 +605,7 @@ unsafe fn os_protect(ptr: NonNull<u8>, size: usize, flags: ProtectFlags) {
     }
 }
 
-/// Map forge-core's `ProtectFlags` to a Windows `PAGE_*` constant.
+/// Map forge-alloc-core's `ProtectFlags` to a Windows `PAGE_*` constant.
 ///
 /// The mapping is **bit-preserving wherever the Win32 ABI can express the
 /// combination**, and chooses the smallest valid superset otherwise.

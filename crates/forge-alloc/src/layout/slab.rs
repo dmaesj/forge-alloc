@@ -640,7 +640,7 @@ where
 // stable builds.
 // ============================================================================
 
-// Kani proofs depend on `crate::backing::InlineBacked`; forge-backing is gated
+// Kani proofs depend on `crate::backing::InlineBacked`; the `backing` module is gated
 // behind the `std` feature in this crate (see Cargo.toml), so the proof
 // module must be gated similarly. Kani CI must run with the `std`
 // feature enabled for these proofs to compile.

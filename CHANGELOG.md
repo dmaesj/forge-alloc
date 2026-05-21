@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-05-21
+
 ### Changed (crate consolidation)
 - The workspace was consolidated from five published crates to two.
   `forge-backing`, `forge-layout`, and `forge-hardening` are now modules
@@ -226,4 +228,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `Handle<T, G>`, `SlabOwner<T, B>` / `SlabRemote<T, B>` /
   `RemoteFreeQueue`.
 
-[Unreleased]: https://github.com/dmaesj/forge-alloc/compare/main...HEAD
+[Unreleased]: https://github.com/dmaesj/forge-alloc/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/dmaesj/forge-alloc/releases/tag/v0.1.0

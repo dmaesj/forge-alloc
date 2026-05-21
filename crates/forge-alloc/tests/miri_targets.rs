@@ -202,7 +202,7 @@ fn statistics_poison_slab_inline_round_trips() {
 // real coverage for these lives in each crate's own test module.
 
 /// `SizeClassed<MmapBacked, 8>` — requires mmap; tested under non-miri
-/// in `crates/forge-layout/src/size_classed.rs`.
+/// in `crates/forge-alloc/src/layout/size_classed.rs`.
 #[test]
 #[cfg_attr(miri, ignore = "miri-incompatible: requires MmapBacked")]
 fn size_classed_mmap_placeholder() {
@@ -211,7 +211,7 @@ fn size_classed_mmap_placeholder() {
 
 /// `SlabOwner<u64, MmapBacked>` cross-thread drain — requires
 /// `MmapBacked` AND `std::thread`. See
-/// `crates/forge-layout/src/slab_owner.rs` for the live multi-thread test.
+/// `crates/forge-alloc/src/layout/slab_owner.rs` for the live multi-thread test.
 #[test]
 #[cfg_attr(miri, ignore = "miri-incompatible: requires MmapBacked + threads")]
 fn slab_owner_mmap_cross_thread_placeholder() {}
@@ -219,7 +219,7 @@ fn slab_owner_mmap_cross_thread_placeholder() {}
 /// `CacheJitter<BumpArena<MmapBacked>>` — needs `MmapBacked` because
 /// jitter requires inner alignment >= `cache_line_size` and
 /// `InlineBacked::MAX_ALIGN = 16`. Live test in
-/// `crates/forge-hardening/src/cache_jitter.rs`.
+/// `crates/forge-alloc/src/hardening/cache_jitter.rs`.
 #[test]
 #[cfg_attr(miri, ignore = "miri-incompatible: jitter needs MmapBacked alignment")]
 fn cache_jitter_mmap_placeholder() {}
