@@ -408,6 +408,9 @@ fn page_size() -> usize {
 
 #[cfg(unix)]
 unsafe fn os_map(len: usize, flags: &MmapFlags) -> Result<NonNull<u8>, AllocError> {
+    // `mut` is needed only on Linux, where the `MAP_POPULATE` branch below
+    // reassigns it; on macOS / other Unix the binding is never mutated.
+    #[cfg_attr(not(target_os = "linux"), allow(unused_mut))]
     let mut mmap_flags = libc::MAP_ANONYMOUS | libc::MAP_PRIVATE;
     if flags.populate {
         // MAP_POPULATE exists on Linux; on macOS the call still succeeds but

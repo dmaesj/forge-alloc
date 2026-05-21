@@ -53,8 +53,9 @@ jobs:
 
   # ----------------------------------------------------------------
   # no_std surface check: both library crates must compile without
-  # std. Catches accidental `use std::...` (or a prelude-only `Vec`,
-  # `Box`, …) that `cargo test --all-features` would silently miss.
+  # std. `--lib` only — the no_std contract covers library code; test
+  # code runs under std. The `no_std_compile` integration test is the
+  # runnable no_std smoke check.
   # ----------------------------------------------------------------
   no_std:
     name: no_std surface
@@ -65,10 +66,10 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: cargo check -p forge-alloc-core (no_std)
-        run: cargo check -p forge-alloc-core --no-default-features --tests
+        run: cargo check -p forge-alloc-core --no-default-features --lib
 
       - name: cargo check -p forge-alloc (no_std)
-        run: cargo check -p forge-alloc --no-default-features --tests
+        run: cargo check -p forge-alloc --no-default-features --lib
 
   # ----------------------------------------------------------------
   # Benchmark compile check. Verifies the `forge-bench` criterion
@@ -114,14 +115,16 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: miri test forge-alloc-core
-        run: cargo miri test -p forge-alloc-core --all-features
+        # `+nightly` overrides the stable pin in rust-toolchain.toml;
+        # miri is a nightly-only component.
+        run: cargo +nightly miri test -p forge-alloc-core --all-features
 
       - name: miri test forge-alloc
         # The miri_targets.rs harness and nrvo_defeat.rs battery live
         # here. mmap/thread-dependent tests are individually gated with
         # `#[cfg_attr(miri, ignore)]`; proptest_inline_backed.rs and
         # proptest_corruption.rs are module-gated `#![cfg(not(miri))]`.
-        run: cargo miri test -p forge-alloc
+        run: cargo +nightly miri test -p forge-alloc
 
   # ----------------------------------------------------------------
   # Cross-compile smoke checks. `cargo check` (NOT test) against
