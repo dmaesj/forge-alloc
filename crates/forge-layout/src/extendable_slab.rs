@@ -9,7 +9,7 @@
 //! Requires `std` because growth uses `alloc::vec::Vec` and segments are
 //! backed by `MmapBacked`.
 //!
-//! See spec §6.8.
+//! See `docs/ARCHITECTURE.md` for the extendable-slab design.
 
 #![cfg(feature = "std")]
 
@@ -34,7 +34,7 @@ use crate::Slab;
 /// `Send + Sync`. The segment list is guarded by a `Mutex` because we may
 /// need to push to a `Vec` on growth; per-segment slabs are `!Sync` but the
 /// mutex serializes access to the list itself. (For high-contention
-/// workloads, switch to `SlabOwner`/`SlabRemote` in M8 for per-thread
+/// workloads, switch to `SlabOwner`/`SlabRemote` for per-thread
 /// segments.)
 ///
 /// # Panic safety
@@ -56,8 +56,7 @@ use crate::Slab;
 ///   unusable; the application should treat this as a fatal allocator
 ///   error and recreate the `ExtendableSlab`.
 ///
-/// Tier-3 task `a08d99` formerly tracked this asymmetry; resolved by
-/// this documentation.
+/// This asymmetry is intentional and documented here for future maintainers.
 pub struct ExtendableSlab<T, M: FreelistProtection = NoProtection> {
     segment_capacity: usize,
     mac_factory: fn() -> M,
@@ -259,7 +258,7 @@ where
         // performs an `mmap` syscall, which can take milliseconds under
         // memory pressure. Holding the mutex across that syscall would
         // block every concurrent allocate for the duration — defeating
-        // the point of the shared structure (eabad2 sub-item (2)).
+        // the point of the shared structure.
         let new_seg = Self::build_segment(self.segment_capacity, self.mac_factory)?;
 
         // Phase 3: re-acquire the lock to install the new segment.
@@ -295,7 +294,7 @@ where
     fn capacity_bytes(&self) -> Option<usize> {
         // Total bytes across all current segments. Growth means this number
         // can increase between calls — Watermark callers should call this
-        // each check (per spec §7.7 rev 1.5, which we already do).
+        // each check (growth means the value can increase between calls).
         let segs = self.segments.lock().expect("ExtendableSlab mutex poisoned");
         let total: usize = segs
             .iter()
@@ -440,12 +439,11 @@ mod tests {
         assert_eq!(addrs.len(), 100, "every alloc must give a distinct slot");
     }
 
-    /// Regression for eabad2 sub-item (2): `ExtendableSlab::allocate`
-    /// previously held the segments mutex through `Self::build_segment`,
-    /// which performs an `mmap` syscall. The fix drops the lock for the
-    /// syscall and re-acquires for install, with a race-against-self
-    /// check to avoid unbounded over-growth when multiple threads grow
-    /// concurrently.
+    /// Regression: `ExtendableSlab::allocate` previously held the segments
+    /// mutex through `Self::build_segment`, which performs an `mmap` syscall.
+    /// The fix drops the lock for the syscall and re-acquires for install,
+    /// with a race-against-self check to avoid unbounded over-growth when
+    /// multiple threads grow concurrently.
     ///
     /// This test exercises the concurrent-growth path: many threads
     /// each force segment creation. Properties:

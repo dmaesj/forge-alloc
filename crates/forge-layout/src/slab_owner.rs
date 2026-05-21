@@ -9,12 +9,12 @@
 //! next allocate.
 //!
 //! v0.1 ships a `Mutex<VecDeque<u32>>`-backed queue for correctness;
-//! v1.0 will swap in a lock-free MPSC ring per spec §6.7. The visible API
+//! v1.0 will swap in a lock-free MPSC ring. The visible API
 //! is identical either way.
 //!
 //! Requires `std` (uses `Arc`, `Mutex`, `VecDeque`).
 //!
-//! See spec §6.7.
+//! See `docs/ARCHITECTURE.md` for the cross-thread ownership design.
 
 #![cfg(feature = "std")]
 
@@ -51,7 +51,7 @@ pub enum BatchPolicy {
     /// is encoded as `q*4 < cap` / `q*4 > cap*3`. No floating point.
     ///
     /// This is the v1.0 control law; the v2.0 EMA-based upgrade is
-    /// gated on benchmark validation against this baseline (spec §6.7).
+    /// gated on benchmark validation against this baseline.
     Adaptive,
 }
 
@@ -137,8 +137,8 @@ struct SlabInner<T, B: Allocator + forge_core::FixedRange> {
     /// Max queue depth before `try_deallocate` returns `Err`. Read-only after
     /// construction so it's safe to share a line with `slab`.
     queue_capacity: usize,
-    /// Remote-free queue: 0-based slot indices destined for the local freelist.
-    /// Mutex-protected for v0.1; will become lock-free MPSC in v1.0.
+    /// Remote-free queue: `(ptr, layout)` pairs queued for return to the local
+    /// freelist. Mutex-protected for v0.1; will become lock-free MPSC in v1.0.
     /// Cache-line-isolated from `slab` to prevent false sharing — see above.
     remote_queue: CachePadded<Mutex<VecDeque<RemoteEntry>>>,
     /// Mirror of `remote_queue.lock().len()` updated under the same lock.
@@ -160,9 +160,9 @@ struct SlabInner<T, B: Allocator + forge_core::FixedRange> {
     /// `allocate` / `deallocate`, the queue cannot grow unboundedly past
     /// the threshold — the next tick samples a fresh value and drains.
     ///
-    /// Cache-line-isolated alongside the queue (sits inside the same
-    /// `CachePadded` block) so the mirror write stays on the same line
-    /// as the mutex word the remote already dirtied.
+    /// Placed adjacent to `remote_queue` in the struct so the mirror write
+    /// tends to share a cache line with the mutex word the remote already
+    /// dirtied (layout-dependent; no explicit `CachePadded` wrapper here).
     remote_queue_len: AtomicUsize,
     /// Set by [`SlabOwner::drop`] under the `remote_queue` mutex.
     ///
@@ -345,8 +345,8 @@ impl<T, B: Allocator + forge_core::FixedRange> SlabOwner<T, B> {
         // covering the full slab AND its embedded backing buffer, which
         // invalidates the SharedReadWrite tag the backing returned via
         // `InlineBacked::buffer_base` (and which the live slot pointers were
-        // derived from). Miri pass #7 caught this as a Stacked Borrows
-        // violation when `Slab::deallocate` later wrote the freelist link
+        // derived from). Miri caught this as a Stacked Borrows violation
+        // when `Slab::deallocate` later wrote the freelist link
         // through one of those slot pointers.
         let slab = unsafe { &*self.inner.slab.get() };
         for entry in pending {
@@ -498,7 +498,7 @@ unsafe impl<T, B: Allocator + forge_core::FixedRange> Deallocator for SlabOwner<
         // path so a long-lived owner that allocates rarely (or never)
         // and only deallocs locally still services the remote queue.
         // Without this, the remote queue accumulates indefinitely on
-        // dealloc-heavy workloads — eabad2 sub-item (4).
+        // dealloc-heavy workloads.
         self.maybe_drain();
         // Owner-side dealloc: direct push to local freelist (no queue).
         // SAFETY: !Sync ensures exclusive access to the slab. `&*` (Shared
@@ -519,7 +519,7 @@ unsafe impl<T, B: Allocator + forge_core::FixedRange> Allocator for SlabOwner<T,
         // backing's SharedReadWrite tag covering its storage region —
         // every previously-issued slot pointer that the slab's freelist
         // (or its consumers) still holds would become a stale tag, which
-        // is UB under Stacked Borrows. (Miri pass #7 caught this.)
+        // is UB under Stacked Borrows.
         let slab = unsafe { &*self.inner.slab.get() };
         // If first attempt fails (local list empty + uncarved exhausted),
         // drain in case the queue has frees we can recover.
@@ -1002,7 +1002,7 @@ mod tests {
     }
 
     // ====================================================================
-    // M12: BatchPolicy::Adaptive — stepped-threshold control law tests
+    // BatchPolicy::Adaptive — stepped-threshold control law tests
     // ====================================================================
 
     /// Helper: build a slab with `Adaptive` policy and a small queue

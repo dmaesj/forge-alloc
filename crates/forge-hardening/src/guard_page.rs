@@ -10,7 +10,7 @@
 //! region_size - page_size)`) at construction and manages its own cursor
 //! inside that subrange.
 //!
-//! See spec §7.2.
+//! See `docs/ARCHITECTURE.md` for the composable-wrapper design.
 
 use core::cell::UnsafeCell;
 use core::ptr::NonNull;

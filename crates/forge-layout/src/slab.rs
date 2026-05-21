@@ -6,8 +6,8 @@
 //! two, so slot reuse is always size- and alignment-compatible.
 //!
 //! Freelist uses 1-based indices (`0` = empty), separating the "list empty"
-//! sentinel from any valid slot — see spec §4.5 / §6.2 (revision 1.5) for the
-//! design.
+//! sentinel from any valid slot — see `docs/ARCHITECTURE.md` for the
+//! freelist design.
 
 use core::cell::UnsafeCell;
 use core::marker::PhantomData;
@@ -86,7 +86,7 @@ struct FreeLink {
 ///
 /// `Send` if `T`, `B`, `M` are `Send`. `Sync`: NO. The free list head and
 /// next-uncarved cursor live in `UnsafeCell`s so that `Allocator::allocate`
-/// can take `&self`. Cross-thread deallocation uses the M8 `SlabRemote` —
+/// can take `&self`. Cross-thread deallocation uses `SlabRemote` —
 /// not this type directly.
 ///
 /// # API-misuse compile-failures (pinned)
@@ -129,8 +129,8 @@ pub struct Slab<T, B: Allocator + FixedRange, M: FreelistProtection = NoProtecti
     /// `0` otherwise. `slot_index` uses this to replace runtime `/ stride`
     /// and `% stride` with `>> shift` and `& (stride - 1)` for the common
     /// pow2-stride case (every `T` whose size and align are powers of two
-    /// with size ≥ size_of::<FreeLink>(), which is most real types). The
-    /// sentinel `0` is safe because real strides are always ≥ size_of::<FreeLink>() = 8,
+    /// with size ≥ `size_of::<FreeLink>()`, which is most real types). The
+    /// sentinel `0` is safe because real strides are always ≥ `size_of::<FreeLink>()` = 8,
     /// so a true pow2 stride has shift ≥ 3.
     stride_shift: u32,
     capacity: u32,
@@ -406,7 +406,7 @@ unsafe impl<T, B: Allocator + FixedRange, M: FreelistProtection> Deallocator for
             // `self.backing.base()`, each of which traverses fresh shared
             // reborrows. The resulting pointer sits at the top of the
             // borrow stack and is valid even after the outer Unique
-            // retag. (Miri pass #7 caught the original bug across
+            // retag. (Miri caught the original bug across
             // SlabOwner / Quarantine / PoisonOnFree / etc.)
             let slot_ptr = self.slot_ptr(idx);
             slot_ptr.cast::<FreeLink>().write(link);
@@ -630,7 +630,7 @@ where
 }
 
 // ============================================================================
-// Kani proof harnesses (spec M13)
+// Kani proof harnesses
 //
 // These prove correctness properties of the freelist push/pop and slot-index
 // recovery logic on a tiny slab. Kani enumerates all input combinations
@@ -859,7 +859,7 @@ mod tests {
 
     // Note: the previous runtime test `rejects_zst_payload` constructed
     // `Slab::<(), InlineBacked<64>, NoProtection>::new(...)` and expected
-    // `Err(AllocError)`. Pass #8 promoted that rejection to a
+    // `Err(AllocError)`. That rejection was later promoted to a
     // compile-time const_assert (`Slab::ASSERT_T_NON_ZST`), so the
     // misuse can no longer be expressed as a runtime test — it would
     // fail to compile at every call site. The equivalent pin lives as a

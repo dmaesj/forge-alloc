@@ -4,8 +4,6 @@
 //! OS calls. Compiles under `no_std`. Suitable for `BumpArena<InlineBacked<N>>`
 //! patterns where the entire allocator lives on the stack, in BSS, or inside
 //! a `Box`.
-//!
-//! See spec §5.1.
 
 use core::cell::UnsafeCell;
 use core::mem::MaybeUninit;
@@ -72,7 +70,7 @@ pub const MAX_ALIGN: usize = 16;
 /// `UnsafeCell<T>` is `!Sync` regardless of `T`, which gives us the right
 /// behavior without any extra marker field. If you need cross-thread
 /// allocation use a higher-layer wrapper that adds atomicity (e.g.
-/// `SharedBumpArena` in M3).
+/// `SharedBumpArena`).
 #[repr(C, align(16))]
 pub struct InlineBacked<const N: usize> {
     storage: UnsafeCell<MaybeUninit<[u8; N]>>,
@@ -130,7 +128,7 @@ impl<const N: usize> InlineBacked<N> {
     /// All previously issued pointers become invalid. The caller is
     /// responsible for ensuring no outstanding pointer is read or written
     /// after this call. The `&mut self` receiver and `BumpDeallocator<'a>`
-    /// lifetime patterns (M3) enforce this at compile time for Box-style
+    /// lifetime patterns enforce this at compile time for Box-style
     /// usage; raw `allocate` callers must enforce it themselves.
     #[inline]
     pub fn reset(&mut self) {
@@ -320,7 +318,7 @@ mod tests {
         assert_eq!(b.capacity_bytes(), Some(2048));
     }
 
-    /// Regression for pass-#5: `base()` must NOT be cached at construction.
+    /// Regression: `base()` must NOT be cached at construction.
     /// Returning an `InlineBacked` by value relocates the inline storage,
     /// so a post-move `base()` query MUST reflect the new location.
     ///
@@ -362,8 +360,7 @@ mod tests {
     /// return it by value, then allocate **after** the move and verify the
     /// returned region lies inside `[base(), base()+size())`. This is the
     /// "structure-relative backing keeps working after a move" invariant —
-    /// the exact property that `BumpArena<InlineBacked<N>>` relies on and
-    /// that the pass-#5 fixes were supposed to guarantee.
+    /// the exact property that `BumpArena<InlineBacked<N>>` relies on.
     ///
     /// Note: allocating BEFORE the move and inspecting the returned ptr
     /// AFTER the move would not test this invariant — per the type's

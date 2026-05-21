@@ -192,10 +192,11 @@ pub unsafe trait Allocator: Deallocator {
     /// `AllocError` — only arena-style allocators implement a meaningful
     /// reset.
     ///
-    /// **NOTE**: this method is provisional. Per spec §4.1, a dedicated `Reset`
-    /// trait is the v2.0 design; the method on `Allocator` exists in v1.0 to
-    /// avoid a trait explosion during stabilization. Implementors of arenas
-    /// should override; implementors of slabs should leave the default.
+    /// **NOTE**: this method is provisional. A dedicated `Reset` trait is the
+    /// v2.0 design (see `docs/ARCHITECTURE.md`); the method on `Allocator`
+    /// exists in v1.0 to avoid a trait explosion during stabilization.
+    /// Implementors of arenas should override; implementors of slabs should
+    /// leave the default.
     #[inline]
     fn reset(&mut self) -> Result<(), AllocError> {
         Err(AllocError)
@@ -247,8 +248,10 @@ pub unsafe trait Allocator: Deallocator {
     /// Implementors must guarantee:
     ///
     /// 1. **Monotonic**: the value returned never decreases for the
-    ///    lifetime of `self`. A counter that wraps (overflows `u64`) is
-    ///    out of scope — at one event/ns, `u64::MAX` is >580 years.
+    ///    lifetime of `self`. Implementors that store the counter in an
+    ///    `AtomicUsize` must widen to `u64` before returning, or document
+    ///    that the counter wraps at `usize::MAX` (which on 32-bit targets
+    ///    can happen in seconds under extreme load).
     /// 2. **Thread-safe / `&self`-only**: callable from any thread that
     ///    holds `&self`. Implementors must not take a mutable lock that
     ///    could deadlock with concurrent `allocate` / `deallocate`.

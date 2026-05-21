@@ -3,7 +3,7 @@
 //! to the smallest slab whose stride satisfies the request; oversized
 //! requests fall through to the backing.
 //!
-//! See spec §6.3.
+//! See `docs/ARCHITECTURE.md` for the composable-allocator design.
 
 use core::cell::UnsafeCell;
 use core::mem::{align_of, size_of};
@@ -74,7 +74,7 @@ impl UntypedSlab {
 
     /// Resolve the slab's current absolute base from the live backing
     /// base pointer. Per-call recompute defeats the pre-move-cached-
-    /// pointer UAF the agent surfaced in pass #5.
+    /// pointer UAF described in the stale-base-pointer design note.
     #[inline]
     fn base_ptr(&self, backing_base: NonNull<u8>) -> NonNull<u8> {
         // SAFETY: at construction we placed the region inside
@@ -232,7 +232,7 @@ pub struct SizeClassed<B: Allocator + FixedRange, const CLASSES: usize> {
     /// pair `(base_offset, region_size)` in cache-hot form for fast bounds
     /// rejection. The base address is computed *live* via
     /// `self.backing.base() + slabs[i].base_offset` — caching it would
-    /// reintroduce the pre-move-stale-pointer UAF the pass-#5 audit
+    /// reintroduce the pre-move-stale-pointer UAF previously
     /// surfaced for `Slab`/`BumpArena`/`SharedBumpArena`/`StackAlloc`.
     region_sizes: [usize; CLASSES],
 }
@@ -307,8 +307,8 @@ impl<B: Allocator + FixedRange, const CLASSES: usize> SizeClassed<B, CLASSES> {
             // access keeps the slab pointing at the live backing region
             // even when the constructor's return-by-value moves the
             // backing's storage (cf. `InlineBacked<N>::base()` returning
-            // `&self.storage`). This is the same anti-UAF pattern the
-            // pass-#5 audit applied to `Slab`/`BumpArena`/`SharedBumpArena`/
+            // `&self.storage`). This is the same anti-UAF pattern
+            // applied to `Slab`/`BumpArena`/`SharedBumpArena`/
             // `StackAlloc`.
             let region_addr = region.cast::<u8>().as_ptr() as usize;
             let backing_addr = backing.base().as_ptr() as usize;
@@ -392,7 +392,7 @@ impl<B: Allocator + FixedRange, const CLASSES: usize> SizeClassed<B, CLASSES> {
         // base address is recomputed *live* on each route_dealloc call
         // via `self.backing.base() + slabs[i].base_offset`; caching the
         // absolute base here would reintroduce the move-stale-pointer
-        // UAF the pass-#5 audit fixed for `Slab`/`BumpArena`/etc.
+        // UAF previously fixed for `Slab`/`BumpArena`/etc.
         let mut region_sizes = [0usize; CLASSES];
         for i in 0..CLASSES {
             region_sizes[i] = slabs[i].capacity as usize * slabs[i].block_stride;
@@ -559,8 +559,8 @@ impl<B: Allocator + FixedRange, const CLASSES: usize> Drop for SizeClassed<B, CL
         // region's current absolute base from `backing.base() +
         // base_offset` rather than reading a cached pointer — the
         // backing's `base()` is the live address after any moves the
-        // wrapper underwent. (See the stale-base-pointer UAF the
-        // pass-#5 audit fixed for Slab/BumpArena/etc.)
+        // wrapper underwent. (See the stale-base-pointer UAF
+        // previously fixed for Slab/BumpArena/etc.)
         for i in 0..CLASSES {
             // SAFETY: we issued backing.allocate(class_layouts[i]) at
             // construction, recorded the offset from backing.base(),
@@ -718,8 +718,8 @@ mod tests {
     /// This is a RUNTIME check (the backing's `Allocator::allocate`
     /// surface returns `AllocError` for over-alignment); the type
     /// system does not currently enforce
-    /// `backing::MAX_ALIGN >= max(class_sizes)` at compile time. See
-    /// the FOUND entry in pass #8.
+    /// `backing::MAX_ALIGN >= max(class_sizes)` at compile time — the
+    /// safety contract on the type does not yet enforce this statically.
     #[test]
     fn inline_backed_rejects_oversize_class_at_construction() {
         // Stride 32 already exceeds InlineBacked's MAX_ALIGN = 16, so

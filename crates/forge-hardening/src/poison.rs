@@ -4,9 +4,9 @@
 //! Prevents freed data (PHI, key material, session tokens) from being
 //! recovered via UAF reads or from persisting in freed memory for
 //! information disclosure. Complements [`crate::Watermark`] /
-//! `Quarantine` (M6) — poison destroys content, quarantine delays reuse.
+//! [`crate::Quarantine`] — poison destroys content, quarantine delays reuse.
 //!
-//! See spec §7.3.
+//! See `docs/ARCHITECTURE.md` for the composable-wrapper design.
 
 use core::ptr::NonNull;
 

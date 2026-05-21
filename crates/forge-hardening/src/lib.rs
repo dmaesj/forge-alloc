@@ -2,8 +2,8 @@
 //!
 //! Layer 3 hardening wrappers for the forge-alloc family. Each wrapper
 //! decorates an inner [`forge_core::Allocator`] with one specific protection or
-//! observability behavior. Per spec §2 P2, all costs are paid only when the
-//! wrapper is composed — wrappers absent from the type pay zero overhead.
+//! observability behavior. All costs are paid only when the wrapper is composed
+//! — wrappers absent from the type pay zero overhead.
 //!
 //! Ships:
 //!
@@ -38,8 +38,6 @@
 //!   Linux; no-op on macOS / Windows.
 //! - [`SplitMetadata<I>`] — wraps the inner region with a separate metadata
 //!   `MmapBacked`; data and metadata live at unrelated virtual addresses.
-//!
-//! See `composable_allocator_spec.md` §7 + §9 for the full design.
 
 #![cfg_attr(not(feature = "std"), no_std)]
 #![deny(unsafe_op_in_unsafe_fn)]

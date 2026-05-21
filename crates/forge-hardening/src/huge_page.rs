@@ -19,7 +19,7 @@
 //! the way purges do, and a caller setting `PROT_NONE` (e.g. for a
 //! guard page) explicitly wants the page split.
 //!
-//! See spec §9.1.
+//! See `docs/ARCHITECTURE.md` for design context.
 
 use core::ptr::NonNull;
 

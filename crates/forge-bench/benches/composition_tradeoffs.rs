@@ -121,7 +121,7 @@ fn bench_tradeoffs(c: &mut Criterion) {
     // Tier 1 — + observability (atomic counters / threshold checks)
     // ============================================================================
 
-    // 1a: Statistics<Slab> — adds 5 atomic counters per allocate + per dealloc
+    // 1a: Statistics<Slab> — adds ~4 relaxed atomic counter updates per allocate, ~3 per dealloc
     bench_round_trip(&mut g, "tier1a_statistics_slab", layout, || {
         Statistics::new(
             Slab::<u64, MmapBacked>::new(SLAB_CAPACITY, MmapBacked::new(MMAP_BYTES).unwrap())
@@ -167,8 +167,7 @@ fn bench_tradeoffs(c: &mut Criterion) {
     // 3a: Canary<BumpArena> — pre/post 8-byte sentinels per allocation.
     // Wraps BumpArena rather than Slab because Canary's per-alloc layout
     // inflation (size + 2 * align worth of pad bytes) does not fit
-    // Slab's fixed block_stride for an 8-byte payload — the documented
-    // pattern in COMPOSITION_RECIPES.md is `Canary<BumpArena<...>>`.
+    // Slab's fixed block_stride for an 8-byte payload.
     bench_arena(&mut g, "tier3a_canary_bump", layout, || {
         Canary::new(BumpArena::new(MmapBacked::new(MMAP_BYTES).unwrap()).unwrap())
     });

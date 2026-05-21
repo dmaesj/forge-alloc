@@ -103,9 +103,9 @@ fn observable_production_stack() {
         WatermarkLevel::Oom => {}
     });
 
-    // 16-slot Slab over 1 KiB capacity (each u64 slot is 8 bytes, +
-    // FreeLink padding) so we can cross 75% / 90% thresholds with a
-    // small, predictable number of allocations.
+    // 16-slot Slab over 128-byte capacity (16 slots × 8 bytes/u64 slot) so
+    // we can cross 75% / 90% thresholds with a small, predictable number of
+    // allocations.
     let pool = Watermark::with_thresholds(
         Statistics::new(PoisonOnFree::new(
             Slab::<u64, _>::new(16, MmapBacked::new(4 * 1024).unwrap()).unwrap(),
@@ -209,7 +209,7 @@ fn generational_handle_slab() {
 }
 
 // ============================================================================
-// Cross-crate composition coverage (pass #4 review).
+// Cross-crate composition coverage.
 //
 // These tests exercise compositions where two or more wrappers interact in
 // ways no single-crate test can cover. Each test pins a documented behavior;
@@ -342,8 +342,8 @@ fn watermark_over_with_fallback_monitors_primary_only() {
 
 #[test]
 fn with_fallback_try_new_reachable_via_meta_crate() {
-    // Pass #2 found re-export gaps. This test confirms that
-    // `WithFallback::try_new` (added after pass #1) is callable through the
+    // Re-export gaps have surfaced here before. This test confirms that
+    // `WithFallback::try_new` is callable through the
     // meta-crate import surface — it relies on the leaf crate's pub fn, but
     // a missing re-export of `WithFallback` would block the call site.
     let a = InlineBacked::<256>::new();
@@ -351,11 +351,11 @@ fn with_fallback_try_new_reachable_via_meta_crate() {
     let _wf = WithFallback::try_new(a, b).expect("disjoint backings accepted");
 }
 
-/// Regression for pass-#6: `System` does NOT implement `FixedRange`, but
+/// Regression: `System` does NOT implement `FixedRange`, but
 /// `Statistics<I>`, `Watermark<I, _>`, and `Canary<I>` must NOT require it
 /// either — their `Allocator`/`Deallocator` impls are bound only on
-/// `I: Allocator`. After pass #5's FixedRange-bound additions, an over-
-/// constrained wrapper would silently drop `System` out of every recipe
+/// `I: Allocator`. An over-constrained wrapper that demanded `FixedRange`
+/// would silently drop `System` out of every recipe
 /// where it's wrapped for observability. This test compiles each
 /// composition shape end-to-end, then exercises a real allocate/deallocate
 /// cycle through it.

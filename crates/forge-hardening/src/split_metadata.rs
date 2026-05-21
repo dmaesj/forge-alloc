@@ -10,7 +10,7 @@
 //! canary storage out of the data region's cache lines and out of
 //! reach of linear overflows past user allocations.
 //!
-//! See spec §9.5.
+//! See `docs/ARCHITECTURE.md` for design context.
 
 use core::ptr::NonNull;
 
@@ -28,8 +28,7 @@ use forge_core::{AllocError, Allocator, Deallocator, FixedRange, NonZeroLayout, 
 /// `OsBacked` and `GuardPage` rejects it at the type level). For the
 /// `HardenedSlab` recipe — the recommended security composition — the
 /// guard pages wrap the OS-mapped data side and the `Slab` lives on
-/// top, giving the form `Slab<T, GuardPage<SplitMetadata<MmapBacked>>>`
-/// (see `composable_allocator_spec.md` §9.5).
+/// top, giving the form `Slab<T, GuardPage<SplitMetadata<MmapBacked>>>`.
 #[must_use = "SplitMetadata guards the data region only. \
               For full coverage, compose with GuardPage<_> on an \
               OsBacked inner: `GuardPage<SplitMetadata<MmapBacked>>` \

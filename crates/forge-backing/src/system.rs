@@ -7,15 +7,14 @@
 //!
 //! # Implementation note
 //!
-//! Spec §5.3 names this primitive after [`std::alloc::System`]. The
-//! implementation routes through [`allocator_api2::alloc::Global`] instead,
-//! because `Global` plugs into both the stable and nightly `Allocator` ABIs
-//! through a single crate. On a default `cargo` build with no
-//! `#[global_allocator]` override, `Global` *is* `std::alloc::System`, so the
-//! behaviour matches the spec verbatim. If a downstream user installs a
-//! custom `#[global_allocator]`, `System` here will route through that
-//! allocator — which is consistent with the spec's intent ("fall back to the
-//! OS heap") but worth knowing.
+//! This primitive is named after [`std::alloc::System`]. The implementation
+//! routes through [`allocator_api2::alloc::Global`] instead, because `Global`
+//! plugs into both the stable and nightly `Allocator` ABIs through a single
+//! crate. On a default `cargo` build with no `#[global_allocator]` override,
+//! `Global` *is* `std::alloc::System`, so the behaviour is identical. If a
+//! downstream user installs a custom `#[global_allocator]`, `System` here will
+//! route through that allocator — which is consistent with the intent ("fall
+//! back to the OS heap") but worth knowing.
 
 use core::ptr::NonNull;
 

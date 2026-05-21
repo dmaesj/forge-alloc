@@ -4,12 +4,11 @@
 //! the slot's. This prevents ABA / use-after-free at the API level: a stale
 //! handle returns `None` rather than producing undefined behavior.
 //!
-//! Interleaved layout (spec §6.6 rev 1.5 / Gate 4): generation + state live
-//! together in a single `GenerationalSlot<T>` struct, backed by one
-//! contiguous allocation. One cache-line load covers both the generation
-//! check and the value access.
+//! Interleaved layout: generation + state live together in a single
+//! `GenerationalSlot<T>` struct, backed by one contiguous allocation.
+//! One cache-line load covers both the generation check and the value access.
 //!
-//! See spec §6.6.
+//! See `docs/ARCHITECTURE.md` for the generational-slab design.
 
 use core::marker::PhantomData;
 use core::ptr::NonNull;
@@ -70,8 +69,9 @@ impl GenerationInt for u64 {
 ///   millions of connections per second).
 /// - `G = u64`: wrap after 2^64 reuses — effectively unreachable in
 ///   any realistic deployment (>500 years at 1 GHz of pure slot churn).
-///   Recommended for long-lived servers; the per-handle cost is 4
-///   extra bytes (8 vs 12 including padding).
+///   Recommended for long-lived servers; the per-handle cost is 8
+///   extra bytes (8 bytes for `u32`, 16 for `u64` — the wider counter
+///   forces 8-byte struct alignment and 4 bytes of tail padding).
 ///
 /// `Copy` means a handle can outlive the slot's original lifetime
 /// arbitrarily — including past 2^G recycles. If your handles can
@@ -94,8 +94,8 @@ impl GenerationInt for u64 {
 /// monotonic pool-id passed through `PhantomData` — and is
 /// **API-breaking** because every `Handle<T, G>` user signature
 /// would gain an extra type parameter. The v0.1 API ships without
-/// it; v2.0+ may revisit. See COMPOSITION_RECIPES.md §"Generational
-/// slab" for the documented pitfall.
+/// it; v2.0+ may revisit. See the "Generational-handle slab" recipe
+/// in `docs/COMPOSITION_RECIPES.md` for the documented pitfall.
 ///
 /// Until branded, callers who keep multiple pools of the same `T`
 /// must NOT mix their handles. The naming convention recommended in
@@ -144,7 +144,7 @@ pub struct GenerationalSlab<T, B: Allocator + FixedRange, G: GenerationInt = u32
     /// time would then point at the backing's OLD location after `Self {
     /// backing, ... }` moves the backing into Self by-value — silently
     /// corrupting every subsequent `insert` / `get` / `remove`. Matches the
-    /// Slab move-safety pattern from pass #5.
+    /// Slab move-safety pattern (see `UntypedSlab::base_offset` in size_classed.rs).
     slots_offset: usize,
     capacity: u32,
     /// Free-list head: `None` = empty (must carve from `len`).
@@ -436,7 +436,7 @@ unsafe impl<T: Sync, B: Allocator + FixedRange + Sync, G: GenerationInt + Sync> 
 }
 
 // ============================================================================
-// Kani proof harnesses (spec M13)
+// Kani proof harnesses
 // ============================================================================
 
 #[cfg(kani)]
@@ -577,7 +577,7 @@ mod tests {
         assert_eq!(drops.load(Ordering::Relaxed), 2);
     }
 
-    /// Regression for pass #6 stale-pointer hunt: `GenerationalSlab` used to
+    /// Regression: `GenerationalSlab` used to
     /// cache `slots: NonNull<GenerationalSlot<T, G>>` captured from
     /// `backing.allocate(...)` BEFORE the backing was moved into Self. For
     /// structure-relative backings like `InlineBacked<N>` (whose `base()`

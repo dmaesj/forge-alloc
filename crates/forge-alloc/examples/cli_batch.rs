@@ -10,7 +10,7 @@
 //!                          │
 //!                          ▼
 //!   ┌────────────────────────────────────────────────┐
-//!   │     BumpArena<InlineBacked<256 KiB>>           │
+//!   │     BumpArena<InlineBacked<64 KiB>>            │
 //!   │                                                │
 //!   │   all allocs ──► bump cursor (~2 ns/op)        │
 //!   │   no deallocs ──► all reclaimed at process exit│

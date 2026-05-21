@@ -1,4 +1,4 @@
-//! Pass-#7 property-based tests for `InlineBacked`-backed allocators and
+//! Property-based tests for `InlineBacked`-backed allocators and
 //! their hardening compositions.
 //!
 //! Skipped entirely under miri: the proptest runner internally calls
@@ -10,7 +10,7 @@
 //! `cargo test` for randomized coverage.
 #![cfg(not(miri))]
 //!
-//! The pass-#6 NRVO regression battery exercises a small set of *fixed*
+//! The NRVO regression battery in `nrvo_defeat.rs` exercises a small set of *fixed*
 //! scenarios under stack pressure. This file complements it with
 //! `proptest`-generated random sequences that probe the same invariants
 //! across thousands of randomly-shaped histories.
@@ -18,7 +18,7 @@
 //! Every test in this file follows the same shape:
 //!
 //!   1. Build the wrapper in an `#[inline(never)]` helper that returns
-//!      by value — the same NRVO-defeating recipe pass #6 settled on.
+//!      by value — the standard NRVO-defeating recipe.
 //!   2. Apply random stack pressure between the constructor return and
 //!      first use; this means even if the optimizer collapses caller
 //!      and callee slots for one input, the next random input is
@@ -36,7 +36,7 @@
 //! - **LIFO / FIFO contract** — Slab + StackAlloc dealloc-then-realloc
 //!   returns the most-recently-freed slot.
 //! - **Wrapper invariants** — Statistics counter accuracy, Watermark
-//!   peak monotonicity, Quarantine FIFO eviction, GenerationalSlab
+//!   allocated-bytes accuracy, Quarantine FIFO eviction, GenerationalSlab
 //!   generation monotonicity, WithFallback provenance routing.
 //!
 //! Each test runs ~256 random sequences by default; sequence length is
@@ -56,7 +56,7 @@ use forge_alloc::{
 use proptest::prelude::*;
 
 // ============================================================================
-// Shared helpers (mirroring the pass-#6 NRVO-defeat shape)
+// Shared helpers (mirroring the nrvo_defeat.rs NRVO-defeat shape)
 // ============================================================================
 
 /// Apply heavy stack pressure between the constructor-return and the
@@ -942,7 +942,7 @@ proptest! {
 
 // ============================================================================
 // 11. Full-state invariant: post-move random sequence on the full
-//     pass-#6 alias `PoisonOnFree<Quarantine<Slab>>` — every allocation
+//     composition `PoisonOnFree<Quarantine<Slab>>` — every allocation
 //     stays inside the live backing.
 // ============================================================================
 

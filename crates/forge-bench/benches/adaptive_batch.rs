@@ -5,11 +5,11 @@
 //! remote queue. The benchmark measures owner throughput (allocate
 //! latency on the hot path) under each policy.
 //!
-//! Per spec §6.7, this benchmark is the validation gate for the
-//! Adaptive policy: v2.0 EMA-based control law lands only if it
-//! consistently beats this v1.0 stepped baseline.
+//! This benchmark is the validation gate for the Adaptive policy:
+//! a new batch-size control law lands only if it consistently beats
+//! the Fixed-policy baselines measured here.
 //!
-//! # Measurement design (reviewer R-5 fix)
+//! # Measurement design
 //!
 //! The earlier version of this bench built the owner + spawned remote
 //! threads inside each Criterion iter — measurement was dominated by

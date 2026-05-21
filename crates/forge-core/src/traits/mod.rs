@@ -1,4 +1,4 @@
-//! Foundation traits (M1).
+//! Foundation traits.
 //!
 //! These traits define the contracts that all backing primitives, layout
 //! primitives, and hardening wrappers compose against. They are intentionally

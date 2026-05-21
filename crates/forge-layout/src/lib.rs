@@ -27,8 +27,6 @@
 //! - [`SlabOwner<T, B>`] + [`SlabRemote<T, B>`] — cross-thread typed
 //!   allocator with ownership-return remote frees; configurable batch
 //!   drain via [`BatchPolicy`] (Fixed / Adaptive).
-//!
-//! See `composable_allocator_spec.md` §6 for the full design.
 
 #![cfg_attr(not(feature = "std"), no_std)]
 #![deny(unsafe_op_in_unsafe_fn)]

@@ -1,13 +1,12 @@
-//! Compile-only smoke test: every type re-exported from `forge_core` under
-//! `--no-default-features` is reachable and the trait surface composes.
+//! Compile-only smoke test: key types re-exported from `forge_core` under
+//! `--no-default-features` are reachable and the trait surface composes.
 //!
 //! # CI gate — REQUIRED
 //!
 //! Running `cargo test --all-features` does **not** exercise the no_std
-//! surface: it builds with `std` enabled, so the `#![no_std]` attribute
-//! here is overridden by the host crate's std feature, and any
-//! accidental `use std::…` introduced into `forge_core`'s public surface
-//! will go unnoticed.
+//! surface: it builds `forge-core` with the `std` feature enabled, so
+//! any accidental `use std::…` introduced into `forge_core`'s public
+//! surface compiles fine and goes unnoticed.
 //!
 //! CI **must** add the following step, separate from the default test
 //! run, to actually validate the no_std surface:
@@ -43,8 +42,8 @@ fn _nzl_for_type() -> Option<NonZeroLayout> {
     NonZeroLayout::for_type::<u64>()
 }
 
-// Type erasure check: ensure trait object dyn Allocator is at least nameable
-// (we use dyn Deallocator since Allocator requires Sized in some paths).
+// Type erasure check: ensure a trait object over a forge-core trait is
+// nameable under no_std (uses Deallocator as a simple object-safe example).
 fn _accepts_deallocator(_d: &dyn Deallocator) {}
 
 // Surface check: ProtectFlags constants compile.

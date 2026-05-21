@@ -19,7 +19,7 @@
 //! assert_eq!(arena.allocated(), 0);
 //! ```
 //!
-//! See spec §6.1.
+//! See `docs/ARCHITECTURE.md` for the bump-arena design.
 
 use core::cell::UnsafeCell;
 use core::marker::PhantomData;
@@ -404,7 +404,7 @@ mod tests {
 }
 
 // ============================================================================
-// Kani proof harnesses (spec M13)
+// Kani proof harnesses
 //
 // Kani is a bounded model checker that verifies properties of unsafe code
 // over the entire state space of unconstrained inputs. These harnesses run

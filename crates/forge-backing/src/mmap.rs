@@ -7,8 +7,6 @@
 //! region is laid out bump-style — each `allocate` advances a cursor through
 //! the mapping; `deallocate` is a no-op. Higher layers (`BumpArena`, `Slab`)
 //! impose their own structure on what they receive.
-//!
-//! See spec §5.2.
 
 use core::cell::UnsafeCell;
 use core::ptr::NonNull;
@@ -113,8 +111,8 @@ fn capture_synthetic_einval() {
 
 /// Optional flags for [`MmapBacked::with_flags`].
 ///
-/// Most flags route to features that ship in M9 (`HugePageAligned`,
-/// `NumaLocal`). For M2, only `populate` is honored on platforms that support
+/// Most flags route to features not yet implemented (`HugePageAligned`,
+/// `NumaLocal`). Currently only `populate` is honored on platforms that support
 /// it; the rest are accepted for forward compatibility but currently no-op.
 ///
 /// `#[non_exhaustive]` so future bits (`MAP_LOCKED`, `MAP_NORESERVE`, MTE
@@ -122,7 +120,7 @@ fn capture_synthetic_einval() {
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct MmapFlags {
-    /// Request transparent / explicit huge pages. M9 implements via
+    /// Request transparent / explicit huge pages. Implemented via
     /// `HugePageAligned`; ignored at this layer.
     pub huge_pages: bool,
     /// Fault all pages at allocation time so subsequent accesses don't take
@@ -145,10 +143,10 @@ pub struct MmapFlags {
     /// setting this flag will have any effect, or branch on `cfg!` in
     /// caller code.
     pub populate: bool,
-    /// Bind to a specific NUMA node. M9 implements via `NumaLocal`; ignored
+    /// Bind to a specific NUMA node. Implemented via `NumaLocal`; ignored
     /// at this layer.
     pub numa_node: Option<u32>,
-    /// Append one unmapped guard page after the region. M5 implements via
+    /// Append one unmapped guard page after the region. Implemented via
     /// `GuardPage`; ignored at this layer.
     pub guard_at_end: bool,
 }
@@ -206,7 +204,7 @@ impl MmapBacked {
         Self::with_flags(size, MmapFlags::NONE)
     }
 
-    /// Allocate with huge-pages requested. M2 ignores the hint; M9's
+    /// Allocate with huge-pages requested. This layer ignores the hint;
     /// `HugePageAligned` enforces 2 MiB / 32 MiB alignment.
     pub fn with_huge_pages(size: usize) -> Result<Self, AllocError> {
         Self::with_flags(
@@ -561,9 +559,8 @@ unsafe fn os_release_pages(ptr: NonNull<u8>, size: usize) {
 /// Extracted so unit tests can verify the mapping table without invoking
 /// `mprotect` on the host (the test runs cross-platform; only the table
 /// math is platform-neutral). This is the Unix structural parallel to
-/// [`win32_prot_from_flags`] — pass #8 (May 2026) confirmed each Unix arm
-/// is bit-exact, mirroring the Windows passes #3/#4 that fixed exec-bit
-/// drop and exec-only over-grant in the Win32 table.
+/// [`win32_prot_from_flags`] — each Unix arm maps bit-exactly, unlike
+/// Win32 which cannot express write-without-read combinations natively.
 #[cfg(unix)]
 fn unix_prot_from_flags(flags: ProtectFlags) -> i32 {
     // PROT_NONE is 0 on every Unix; the explicit assignment in the
@@ -645,7 +642,7 @@ fn win32_prot_from_flags(flags: ProtectFlags) -> u32 {
         // valid superset that retains every bit the caller asked for.
         // Crucially, (false, true, true) must route to
         // PAGE_EXECUTE_READWRITE — collapsing it to PAGE_READWRITE would
-        // silently drop the exec bit (the bug pass #3 fixed). The
+        // silently drop the exec bit. The
         // debug_assert in os_protect surfaces these over-grants in dev.
         (false, true, true) => PAGE_EXECUTE_READWRITE,
         (false, true, false) => PAGE_READWRITE,
@@ -823,15 +820,14 @@ mod tests {
         }
     }
 
-    /// Pass #8 (May 2026) structural parallel to the Windows
+    /// Structural parallel to the Windows
     /// `win32_prot_from_flags_preserves_every_requested_bit` regression
     /// test: confirm that every `(read, write, exec)` combination on Unix
     /// produces the corresponding bit-exact `PROT_*` mask with no over-
-    /// grant (the analogue of the Windows pass #4 exec-only fault) and no
-    /// down-grade (the analogue of the Windows pass #3 W+X bug). Unlike
-    /// Win32 — which lacks primitives for write-without-read and (pre-
-    /// pass-#4) exec-only — Unix `mprotect` exposes each bit independently,
-    /// so the table is exact across all eight rows.
+    /// grant (no spurious read added to exec-only) and no down-grade
+    /// (W+X must not collapse to W). Unlike Win32 — which lacks primitives
+    /// for write-without-read and exec-only — Unix `mprotect` exposes each
+    /// bit independently, so the table is exact across all eight rows.
     ///
     /// Running this test on a non-Unix host (Windows) verifies the table
     /// math at compile time only when this `#[cfg(unix)]` gate is active;
@@ -874,7 +870,7 @@ mod tests {
         assert_eq!(
             unix_prot_from_flags(x),
             libc::PROT_EXEC,
-            "X must be PROT_EXEC only — the Windows pass #4 analogue (over-granting R) \
+            "X must be PROT_EXEC only — over-granting (e.g. adding PROT_READ) \
              must not appear on Unix",
         );
         assert_eq!(unix_prot_from_flags(rw), libc::PROT_READ | libc::PROT_WRITE);
@@ -882,8 +878,8 @@ mod tests {
         assert_eq!(
             unix_prot_from_flags(wx),
             libc::PROT_WRITE | libc::PROT_EXEC,
-            "W+X must be PROT_WRITE|PROT_EXEC — the Windows pass #3 analogue (dropping the \
-             exec bit) must not appear on Unix. Hardened kernels that enforce W^X surface \
+            "W+X must be PROT_WRITE|PROT_EXEC — silently dropping the exec bit \
+             must not appear on Unix. Hardened kernels that enforce W^X surface \
              EINVAL/EACCES at the mprotect syscall, not by silently masking bits here.",
         );
         assert_eq!(
@@ -900,9 +896,8 @@ mod tests {
     /// debug_assert in `os_protect` only catches write-without-read in dev.
     /// The fix routes W+X through `PAGE_EXECUTE_READWRITE`.
     ///
-    /// Pass #4 additionally tightened exec-only `(F, F, T)` to use
-    /// `PAGE_EXECUTE` (which Windows *does* support, contrary to the
-    /// pass #3 comment) so that callers that opt out of read on NX-capable
+    /// Exec-only `(F, F, T)` uses `PAGE_EXECUTE` (which Windows *does*
+    /// support natively) so that callers that opt out of read on NX-capable
     /// hardware actually get exec-only semantics rather than an
     /// unconditional upgrade to RX.
     ///

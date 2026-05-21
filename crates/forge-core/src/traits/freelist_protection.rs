@@ -6,7 +6,7 @@
 //! pair is signed, so corruption of an in-band freelist pointer is detected
 //! before the corrupted slot is dereferenced.
 //!
-//! See spec §4.5 and §6.2 for the freelist layout and the push/pop algorithm.
+//! See `docs/ARCHITECTURE.md` for the freelist layout and the push/pop algorithm.
 
 use core::fmt;
 
@@ -87,8 +87,8 @@ impl FreelistProtection for NoProtection {
 /// `FreelistProtection::sign`/`verify` to `u64` and growing `FreeLink`
 /// by 4 bytes per slot (4–25% size overhead depending on `T`). For
 /// applications that need stronger guarantees, use `PacMAC` on aarch64
-/// (hardware-backed 16-bit signature stored in unused pointer bits)
-/// once M11 ships its instruction-level body.
+/// (hardware-backed pointer-authentication signature) once its
+/// instruction-level implementation is complete (currently a stub).
 ///
 /// **MAC-failure behavior in `Slab`.** Today, a MAC mismatch (or a
 /// `next_idx > capacity` defense-in-depth tripwire) causes `Slab` to
@@ -102,10 +102,9 @@ impl FreelistProtection for NoProtection {
 /// `debug_assert!` so the regression surfaces in tests. For loud-fail-
 /// on-corruption semantics in production, the slot the attacker
 /// poisoned is leaked until slab drop — no slot is handed back to the
-/// caller from the corrupted chain. A future revision may surface
-/// MAC failure through a new `WatermarkLevel::Corruption` event or
-/// an `AllocStats::corruption_events` counter; until then, treat
-/// MAC-failure as a silent disarm rather than a fail-fast trigger.
+/// caller from the corrupted chain. MAC-failure events are counted by
+/// the allocator and exposed via [`crate::Allocator::corruption_events`];
+/// operators can monitor that counter to detect silent disarms at scale.
 ///
 /// **Truncation in `SipHashMAC::mac` (private)**: we take the low 32 bits of the
 /// SipHash-1-3 output. This is uniform random across forgeries provided
@@ -144,7 +143,7 @@ pub struct SipHashMAC {
 ///   exits, observable via core dumps or `/proc/<pid>/mem` reads.
 ///   Construct on the stack inside the function that uses it (e.g. a
 ///   per-request slab) where the natural scope-exit fires Drop.
-/// - **`panic = "abort"`** builds (and the M5 Quarantine
+/// - **`panic = "abort"`** builds (and the `Quarantine`
 ///   abort-on-corruption path) — Drop is skipped on abort; if a
 ///   `SipHashMAC`-using slab is live at the time, its key remains in
 ///   freed-but-unmapped memory until the OS reclaims the address
@@ -346,11 +345,11 @@ impl fmt::Debug for SipHashMAC {
 /// instructions to sign and verify the `next_idx` value with `slot_addr`
 /// as modifier.
 ///
-/// **STUB — UNIMPLEMENTED.** The instruction-level body lands in M11
+/// **STUB — UNIMPLEMENTED.** The instruction-level body is not yet implemented
 /// alongside the MTE / MPK hardware-protection track. Constructing a
 /// `Slab<T, _, PacMAC>` *compiles* today (the trait is satisfied) but
 /// the first `sign` / `verify` call **panics** with an explicit
-/// "stub awaiting M11" message (see the impl below — `panic!` is
+/// "not yet implemented" message (see the impl below — `panic!` is
 /// chosen over `unimplemented!` to read as a safety-trigger rather
 /// than a maintainer TODO), so accidentally selecting `PacMAC` for
 /// production today crashes the first time the slab allocates or
@@ -370,8 +369,8 @@ impl fmt::Debug for SipHashMAC {
 #[doc(hidden)]
 #[deprecated(
     since = "0.1.0",
-    note = "PacMAC is a stub: sign/verify panic at runtime. Awaiting M11's \
-            PACIB/AUTIB instruction-level implementation. Use SipHashMAC or \
+    note = "PacMAC is a stub: sign/verify panic at runtime. The PACIB/AUTIB \
+            instruction-level implementation is not yet implemented. Use SipHashMAC or \
             NoProtection until then."
 )]
 #[derive(Copy, Clone, Debug, Default)]
@@ -386,7 +385,7 @@ impl FreelistProtection for PacMAC {
         // `pac-stub` feature gate + `#[deprecated]` make compile-time
         // detection the primary defense; this is the last line.
         panic!(
-            "PacMAC::sign called: this is a STUB awaiting M11 \
+            "PacMAC::sign called: this is a STUB — not yet implemented \
              (ARM PACIB/AUTIB instruction-level impl). \
              Disable the `pac-stub` feature in production builds."
         );
@@ -399,7 +398,7 @@ impl FreelistProtection for PacMAC {
         _slot_addr: usize,
     ) -> Result<(), FreelistCorruption> {
         panic!(
-            "PacMAC::verify called: this is a STUB awaiting M11 \
+            "PacMAC::verify called: this is a STUB — not yet implemented \
              (ARM PACIB/AUTIB instruction-level impl). \
              Disable the `pac-stub` feature in production builds."
         );

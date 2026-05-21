@@ -2,8 +2,8 @@
 
 A field guide for composing `forge-alloc` primitives into application-
 specific allocators. Each recipe shows the type signature, when to use it,
-and what each wrapper layer buys you. Spec design lives in
-[`composable_allocator_spec.md`](composable_allocator_spec.md); this doc
+and what each wrapper layer buys you. See
+[`ARCHITECTURE.md`](ARCHITECTURE.md) for the layer model; this doc
 is for *callers* assembling the pieces.
 
 ## Index

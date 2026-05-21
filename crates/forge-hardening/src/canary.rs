@@ -23,10 +23,10 @@
 //!   _pad: [u8; 16] }`) and inflate `align_of::<U>` to 8 to keep the
 //!   pre-pad term predictable.
 //! - For the same observability without the layout penalty, pair `Slab`
-//!   with the M5 `Quarantine` wrapper (catches use-after-free) and rely
-//!   on the SipHash MAC on the freelist link (catches link forgery).
+//!   with [`crate::Quarantine`] (catches use-after-free) and rely on the
+//!   SipHash MAC on the freelist link (catches link forgery).
 //!
-//! See spec §7.1.
+//! See `docs/ARCHITECTURE.md` for the composable-wrapper design.
 
 use core::ptr::NonNull;
 

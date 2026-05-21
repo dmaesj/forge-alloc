@@ -1,4 +1,4 @@
-//! Pass-#8 corruption fuzzing — randomized bit-flips against the
+//! Corruption fuzzing — randomized bit-flips against the
 //! protected-metadata surface of every hardened wrapper.
 //!
 //! The pre-existing tests in `canary.rs`, `cache_jitter.rs`,

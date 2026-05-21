@@ -16,9 +16,6 @@
 //! Higher layers (`forge-backing`, `forge-layout`, `forge-hardening`) consume these
 //! traits to produce primitive types; the `forge-alloc` meta-crate re-exports
 //! everything for convenience.
-//!
-//! See the design specification in `composable_allocator_spec.md` for the full
-//! three-layer model and decision-gate history.
 
 #![cfg_attr(not(feature = "std"), no_std)]
 #![deny(unsafe_op_in_unsafe_fn)]

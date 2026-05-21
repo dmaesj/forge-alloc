@@ -21,7 +21,7 @@
 //!   already-mapped region. `NumaLocal::new` returns the inner
 //!   unchanged with the policy stored but unenforced; production
 //!   Windows NUMA work belongs to `MmapBacked::with_numa_node` at
-//!   MAP-time (deferred to M9.1).
+//!   MAP-time (deferred to a future release).
 //!
 //! `LocalAtRequest` — re-bind on every backing request — is **not**
 //! implemented in v0.1. The wrap-once model doesn't fit per-allocate
@@ -29,7 +29,7 @@
 //! a one-shot bind at construction with thread-local slabs at the
 //! application layer.
 //!
-//! See spec §9.4.
+//! See `docs/ARCHITECTURE.md` for design context.
 
 use core::ptr::NonNull;
 
@@ -38,7 +38,7 @@ use forge_core::{AllocError, Allocator, Deallocator, FixedRange, NonZeroLayout, 
 /// NUMA placement policy. v0.1 accepts an explicit node set rather
 /// than dispatching against the calling thread's node — supply
 /// `current_numa_node()` if you want the local-at-construction
-/// behaviour from the spec.
+/// behaviour.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum NumaPolicy {
     /// `MPOL_BIND` — pages must come from the listed nodes; if no

@@ -1,8 +1,7 @@
 # Architecture
 
-High-level mental model for `forge-alloc`. Companion to
-[`composable_allocator_spec.md`](composable_allocator_spec.md) (the
-design source-of-truth) and [`COMPOSITION_RECIPES.md`](COMPOSITION_RECIPES.md)
+High-level mental model for `forge-alloc` — the design source-of-truth.
+Companion to [`COMPOSITION_RECIPES.md`](COMPOSITION_RECIPES.md)
 (caller-facing examples).
 
 ## Three layers, separable

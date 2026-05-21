@@ -1,7 +1,7 @@
 //! `SharedBumpArena<B>` — atomic-cursor variant of [`BumpArena`].
 //!
-//! `Send + Sync`. Each allocate is a single `AtomicUsize::fetch_add` plus
-//! alignment rounding. No `reset()` — see spec §6.1: getting `&mut self`
+//! `Send + Sync`. Each allocate is a `compare_exchange_weak` CAS loop that
+//! handles alignment rounding atomically. No `reset()` — getting `&mut self`
 //! through an `Arc<SharedBumpArena>` requires `Arc::get_mut()`, at which
 //! point the arena can simply be dropped and recreated.
 //!
@@ -17,8 +17,8 @@ use forge_core::{AllocError, Allocator, Deallocator, FixedRange, NonZeroLayout};
 
 /// Atomic-cursor bump arena.
 ///
-/// Sound under multi-thread `&self` allocation: the cursor uses `fetch_add`
-/// with a CAS loop to handle alignment rounding atomically.
+/// Sound under multi-thread `&self` allocation: the cursor uses a
+/// `compare_exchange_weak` CAS loop to handle alignment rounding atomically.
 pub struct SharedBumpArena<B: FixedRange> {
     // Held by value to extend the backing's lifetime alongside the arena
     // (RAII — backing drops when the arena drops). Not exposed by accessor:
@@ -85,7 +85,7 @@ impl<B: FixedRange> SharedBumpArena<B> {
 unsafe impl<B: FixedRange> Deallocator for SharedBumpArena<B> {
     #[inline]
     unsafe fn deallocate(&self, _ptr: NonNull<u8>, _layout: NonZeroLayout) {
-        // No-op. SharedBumpArena does not support reset — see spec §6.1.
+        // No-op. SharedBumpArena does not support reset.
     }
 }
 
@@ -184,7 +184,7 @@ unsafe impl<B: FixedRange> Allocator for SharedBumpArena<B> {
     }
 
     // No reset() override — Allocator's default Err(AllocError) is correct.
-    // SharedBumpArena deliberately does not support reset; see spec §6.1.
+    // SharedBumpArena deliberately does not support reset.
 }
 
 impl<B: FixedRange> FixedRange for SharedBumpArena<B> {

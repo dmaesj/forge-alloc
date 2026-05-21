@@ -301,4 +301,4 @@ combines `web_service` + the `HardenedSlab` audit from
 - [`COMPOSITION_RECIPES.md`](COMPOSITION_RECIPES.md) — type-level cookbook (how to wire one primitive).
 - [`PERFORMANCE_TRADEOFFS.md`](PERFORMANCE_TRADEOFFS.md) — what each layer costs (the Criterion bench backs this doc).
 - [`COMPATIBILITY_MATRIX.md`](COMPATIBILITY_MATRIX.md) — which combinations don't work or shouldn't be tried.
-- [`composable_allocator_spec.md`](composable_allocator_spec.md) — design rationale per layer.
+- [`ARCHITECTURE.md`](ARCHITECTURE.md) — the three-layer mental model.

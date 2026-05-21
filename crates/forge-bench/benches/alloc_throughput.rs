@@ -1,8 +1,10 @@
-//! Baseline throughput benchmarks for the four M1-M3 primitives. Per spec
-//! §14, a Criterion baseline is committed; PRs that regress any benchmark by
-//! >5% require explicit override.
+//! Baseline throughput benchmarks for the core allocator primitives.
 //!
-//! Workloads mirror spec §14 "Benchmark workloads representing real use cases":
+//! Baselines are tracked by CodSpeed on its hosted service (not committed
+//! files). PRs that regress any benchmark by >5% require explicit override.
+//! See `.github/workflows/codspeed.yml` for the gate configuration.
+//!
+//! Workloads (see `docs/PERFORMANCE_TRADEOFFS.md` for context):
 //! - Trading bar allocation: typed slab, high frequency, single-threaded
 //! - Query key encoding: bump arena, reset per query
 //! - Parser AST: bump arena, bulk-free per parse
@@ -26,7 +28,7 @@ fn bench_bump_arena_inline(c: &mut Criterion) {
     // Measure a *batch* of 1024 allocations from a fresh arena per iteration.
     // Constructing the arena once outside `iter` lets it exhaust after a few
     // thousand iterations and the bench would then measure only the
-    // `AllocError` return path (spec §14 hot-path numbers must reflect the
+    // `AllocError` return path (hot-path numbers must reflect the
     // success path). `iter_batched` with `LargeInput` resets the arena per
     // batch and amortizes the construction cost.
     let mut g = c.benchmark_group("bump_arena_inline");

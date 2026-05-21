@@ -11,7 +11,7 @@ use super::allocator::Allocator;
 
 /// Memory protection bits passed to [`OsBacked::protect`].
 ///
-/// `#[non_exhaustive]` so the hardware-protection primitives in M10/M11 can
+/// `#[non_exhaustive]` so future hardware-protection primitives can
 /// add bits (`PROT_MTE` tag enable, MPK key index, `PROT_GROWSDOWN`) without
 /// breaking downstream callers. Construct via the provided
 /// [`NONE`](Self::NONE) / [`RW`](Self::RW) / [`READ`](Self::READ) /

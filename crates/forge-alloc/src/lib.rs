@@ -9,9 +9,9 @@
 //! union of:
 //!
 //! - `forge-core` — trait contracts and `NonZeroLayout`
-//! - `forge-backing` — Layer 1 backing primitives (added in M2)
-//! - `forge-layout` — Layer 2 layout primitives (added in M3)
-//! - `forge-hardening` — Layer 3 hardening wrappers (added in M5+)
+//! - `forge-backing` — Layer 1 backing primitives
+//! - `forge-layout` — Layer 2 layout primitives
+//! - `forge-hardening` — Layer 3 hardening wrappers
 //!
 //! Users who want the full surface depend on `forge-alloc`. Users who only
 //! need a subset can depend directly on the relevant `forge-*` crate to minimise
@@ -32,10 +32,10 @@
 //! unsafe { arena.deallocate(block.cast(), layout) };
 //! ```
 //!
-//! See [`composable_allocator_spec.md`] for the full design and
-//! [`COMPOSITION_RECIPES.md`] for caller-facing composition recipes.
+//! See [`ARCHITECTURE.md`] and [`COMPOSITION_RECIPES.md`] for the design
+//! and caller-facing composition recipes.
 //!
-//! [`composable_allocator_spec.md`]: https://github.com/dmaesj/forge-alloc/blob/main/docs/composable_allocator_spec.md
+//! [`ARCHITECTURE.md`]: https://github.com/dmaesj/forge-alloc/blob/main/docs/ARCHITECTURE.md
 //! [`COMPOSITION_RECIPES.md`]: https://github.com/dmaesj/forge-alloc/blob/main/docs/COMPOSITION_RECIPES.md
 
 #![cfg_attr(not(feature = "std"), no_std)]
@@ -98,7 +98,7 @@ pub use forge_hardening::{
 pub use forge_hardening::LogHandler;
 
 // ============================================================================
-// Convenience type aliases for recommended compositions (spec §9.5)
+// Convenience type aliases for recommended compositions
 // ============================================================================
 
 /// Slab with split metadata and guard pages on both regions —

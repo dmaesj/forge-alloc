@@ -1,6 +1,6 @@
-//! Pass-#6 NRVO-defeating regression battery.
+//! NRVO-defeating regression battery.
 //!
-//! Pass #5 found that several allocators cached an absolute base pointer
+//! An earlier audit found that several allocators cached an absolute base pointer
 //! captured BEFORE the wrapper was moved into its final stack slot. The
 //! bug hid across hundreds of tests because NRVO / copy-elision usually
 //! built the wrapper directly in the caller's final slot. Only a test
@@ -22,7 +22,7 @@
 //!      address and either trip a debug assertion or corrupt foreign
 //!      memory.
 //!
-//! Each test is designed so it would FAIL under the pre-pass-#5 absolute-
+//! Each test is designed so it would FAIL under the original absolute-
 //! pointer bug and PASS under the current offset-based fixes. If you add
 //! a new wrapper, add a pinned test here.
 

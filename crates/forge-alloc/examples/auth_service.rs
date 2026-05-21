@@ -13,14 +13,14 @@
 //!   │  Statistics<Watermark<Quarantine<Slab<Token, _>>>>    │
 //!   │                                                       │
 //!   │  ┌─────────────────────────────────────────────┐     │
-//!   │  │  Statistics: 5 atomic counters per op       │     │
-//!   │  │   ─ total_allocations, deallocations         │     │
-//!   │  │   ─ bytes_allocated (current + peak)         │     │
+//!   │  │  Statistics: 6 atomic counters              │     │
+//!   │  │   ─ total_allocations, total_deallocations   │     │
+//!   │  │   ─ bytes_allocated, bytes_peak              │     │
 //!   │  │   ─ failures, corruption_events (mirror)     │     │
 //!   │  └─────────────────────────────────────────────┘     │
 //!   │  ┌─────────────────────────────────────────────┐     │
 //!   │  │  Watermark: capacity-utilisation thresholds  │     │
-//!   │  │   ─ fires handler at 50% / 80% / OOM         │     │
+//!   │  │   ─ fires handler at 75% / 90% / OOM         │     │
 //!   │  └─────────────────────────────────────────────┘     │
 //!   │  ┌─────────────────────────────────────────────┐     │
 //!   │  │  Quarantine<_, 4>: delays slot reuse         │     │

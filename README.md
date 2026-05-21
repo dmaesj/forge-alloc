@@ -17,7 +17,7 @@ type Scratch = Statistics<PoisonOnFree<BumpArena<MmapBacked>>>;
 type Hardened<T> = Slab<T, GuardPage<SplitMetadata<MmapBacked>>>;
 ```
 
-The design lives in [`docs/composable_allocator_spec.md`](docs/composable_allocator_spec.md);
+The design is laid out in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md);
 a per-release summary lives in [`CHANGELOG.md`](CHANGELOG.md).
 
 ## Workspace layout
@@ -44,9 +44,7 @@ Kani proof coverage is ongoing.
 
 Two hardware-gated features are not yet implemented — ARM MTE (memory
 tagging) and x86 MPK (protection keys) — both need the target silicon
-to develop against. See
-[`docs/composable_allocator_spec.md` §15](docs/composable_allocator_spec.md)
-for the full milestone roadmap.
+to develop against.
 
 ## Documentation
 
@@ -65,8 +63,6 @@ for the full milestone roadmap.
   v2.0-deferred constraints).
 - [`docs/PERFORMANCE_TRADEOFFS.md`](docs/PERFORMANCE_TRADEOFFS.md) — the
   pay-for-what-you-use cost curve across the hardening tiers.
-- [`docs/composable_allocator_spec.md`](docs/composable_allocator_spec.md)
-  — the full design specification.
 - [`CONTRIBUTING.md`](CONTRIBUTING.md) — how to add a primitive and
   submit a change.
 

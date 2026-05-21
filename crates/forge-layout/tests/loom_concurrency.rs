@@ -1,7 +1,7 @@
-//! Loom concurrency models for `forge-layout` — pass #8 audit.
+//! Loom concurrency models for `forge-layout`.
 //!
-//! Miri (pass #7) is single-threaded and catches Stacked Borrows + raw
-//! UB on one interleaving. Loom permutes the legal interleavings of a
+//! Miri is single-threaded and catches Stacked Borrows + raw UB on one
+//! interleaving. Loom permutes the legal interleavings of a
 //! tiny model program through C11's `Acquire/Release/Relaxed` semantics
 //! and checks invariants on every one. It catches **concurrency bugs**
 //! that miri's single-threaded execution cannot: missing acquire fences,
@@ -34,7 +34,8 @@
 // Model 1 — SharedBumpArena CAS loop
 // ===========================================================================
 //
-// Pinned production source: crates/forge-layout/src/shared_bump.rs:112..155
+// Pinned production source: `SharedBumpArena::allocate` (the CAS loop)
+// in crates/forge-layout/src/shared_bump.rs
 //
 // Algorithm:
 //   loop {
@@ -160,8 +161,8 @@ mod cas_bump {
 // ===========================================================================
 //
 // Pinned production source:
-//   crates/forge-layout/src/slab_owner.rs:448..510  (SlabOwner::drop)
-//   crates/forge-layout/src/slab_owner.rs:537..560  (SlabRemote::try_deallocate)
+//   crates/forge-layout/src/slab_owner.rs  (SlabOwner::drop)
+//   crates/forge-layout/src/slab_owner.rs  (SlabRemote::try_deallocate)
 //
 // Algorithm:
 //   SlabOwner::drop {
@@ -356,13 +357,13 @@ mod slab_owner_close {
 // Model 3 — ExtendableSlab.first_open_hint
 // ===========================================================================
 //
-// Pinned production source:
-//   crates/forge-layout/src/extendable_slab.rs:143..160  (deallocate / fetch_min)
-//   crates/forge-layout/src/extendable_slab.rs:163..208  (allocate / fetch_max)
+// Pinned production source: crates/forge-layout/src/extendable_slab.rs
+//   ExtendableSlab::deallocate  (first_open_hint / fetch_min)
+//   ExtendableSlab::allocate    (first_open_hint / fetch_max)
 //
 // IMPORTANT: in the production code, **every** read and write of
 // `first_open_hint` happens while `segments.lock()` is held (see the
-// long comment on the field at lines 53..60). That makes the atomicity
+// long comment on the `first_open_hint` field). That makes the atomicity
 // vestigial — the mutex already serializes all hint accesses. There's
 // no concurrent hint access to model: every operation that touches
 // `first_open_hint` runs under exclusive access to the segments vec.

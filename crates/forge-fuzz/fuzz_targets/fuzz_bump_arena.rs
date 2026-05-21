@@ -1,7 +1,7 @@
 #![no_main]
 //! Fuzz target: BumpArena<InlineBacked<N>> under an arbitrary sequence of
-//! allocation requests interleaved with resets. Verifies invariant 3 from
-//! spec §13: no two live allocations overlap.
+//! allocation requests interleaved with resets. Verifies the no-overlap
+//! invariant: no two live allocations overlap.
 
 use forge_backing::InlineBacked;
 use forge_core::{Allocator, NonZeroLayout};

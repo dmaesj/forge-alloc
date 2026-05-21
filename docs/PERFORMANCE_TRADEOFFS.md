@@ -61,8 +61,7 @@ Three design choices make the curve real, not aspirational:
    `if inner_val > mirror.load(Relaxed) { fetch_max(...) }` — in the
    steady-state no-corruption case the inner is 0, the load is one
    `mov`, and the `fetch_max`'s `lock cmpxchg` is skipped entirely.
-   ~5 ns saved per op vs an unconditional `fetch_max`. (Pass #8
-   hot-path audit found this optimisation was already in place.)
+   ~5 ns saved per op vs an unconditional `fetch_max`.
 
 ---
 
@@ -284,8 +283,7 @@ performance-governor pinned will give much tighter intervals.
   etc.
 - [`COMPATIBILITY_MATRIX.md`](COMPATIBILITY_MATRIX.md) — which
   combinations don't work or shouldn't be tried.
-- [`composable_allocator_spec.md`](composable_allocator_spec.md) — the
-  design rationale per layer.
+- [`ARCHITECTURE.md`](ARCHITECTURE.md) — the three-layer mental model.
 - Regression detection runs automatically in CI via
   [CodSpeed](https://codspeed.io) — the `composition_tradeoffs`,
   `alloc_throughput`, and `adaptive_batch` benches are all gated.

@@ -20,7 +20,7 @@
 //! # }
 //! ```
 //!
-//! See spec §6.5.
+//! See `docs/ARCHITECTURE.md` for the fallback-router design.
 
 use core::ptr::NonNull;
 
@@ -29,7 +29,7 @@ use forge_core::{AllocError, Allocator, Deallocator, FixedRange, NonZeroLayout};
 /// Router with primary + secondary allocator.
 ///
 /// `Primary` must implement [`FixedRange`] so that deallocation can be routed
-/// correctly. Growing primaries (e.g. an `ExtendableSlab` from M7) cannot be
+/// correctly. Growing primaries (e.g. an `ExtendableSlab`) cannot be
 /// used here — split them out at the application level instead.
 ///
 /// # Safety / contract
@@ -41,7 +41,7 @@ use forge_core::{AllocError, Allocator, Deallocator, FixedRange, NonZeroLayout};
 ///   `FixedRange`, so this concern is hypothetical.
 /// - Calling `deallocate` with a pointer that belongs to neither allocator
 ///   is UB in release builds; debug builds gain a tracking check only when
-///   `Statistics` (M5) is composed.
+///   `Statistics` is composed.
 ///
 /// # Watermark composition note
 ///

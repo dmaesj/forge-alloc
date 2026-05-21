@@ -6,7 +6,7 @@
 //! reclaim memory but always in LIFO order — typical of nested scope
 //! allocations where teardown is the inverse of construction.
 //!
-//! See spec §6.4.
+//! See `docs/ARCHITECTURE.md` for the stack-allocator design.
 
 use alloc::vec::Vec;
 use core::cell::UnsafeCell;

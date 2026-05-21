@@ -5,7 +5,7 @@
 //! byte usage, and failure counts. The act of wrapping IS the opt-in; an
 //! unwrapped allocator pays zero cost.
 //!
-//! See spec §7.6.
+//! See `docs/ARCHITECTURE.md` for design context.
 
 use core::ptr::NonNull;
 use core::sync::atomic::{AtomicUsize, Ordering};
@@ -165,8 +165,8 @@ impl Default for AllocStats {
 /// user asked for", not "bytes the underlying region holds". If you need
 /// the latter, wrap `Statistics` INSIDE the layout-inflating wrapper:
 /// `Canary<Statistics<Slab<T>>>` counts what Slab actually carved. The
-/// recommended position for `Statistics` (`Statistics<PoisonOnFree<Slab>>`
-/// in §9.5) treats "bytes the user asked for" as the right number to
+/// recommended position for `Statistics` (`Statistics<PoisonOnFree<Slab>>`)
+/// treats "bytes the user asked for" as the right number to
 /// surface to operators; flip the nesting only if you specifically need
 /// physical accounting.
 ///
@@ -538,7 +538,6 @@ mod tests {
     ///    forwarding, which would deadlock the debug-mode catchup
     ///    against the still-corrupted freelist.)
     ///
-    /// Closes lux task 4818da.
     #[test]
     fn corruption_events_propagates_from_slab_mac_failure() {
         use forge_core::FixedRange;

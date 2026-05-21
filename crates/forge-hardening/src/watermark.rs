@@ -1,7 +1,7 @@
 //! `Watermark<I, H>` — monitors allocation utilization in bytes and fires
 //! callbacks at configurable thresholds (warn / critical / oom).
 //!
-//! See spec §7.7.
+//! See `docs/ARCHITECTURE.md` for the composable-wrapper design.
 
 use core::ptr::NonNull;
 use core::sync::atomic::{AtomicUsize, Ordering};
@@ -162,7 +162,7 @@ where
 /// Tracks live bytes in an `AtomicUsize`. Fires the handler on rising
 /// crossings of `warn_pct` and `critical_pct`, and on OOM. Falling edges
 /// (allocations released) do NOT reset the crossing flags — once a region
-/// reaches warn, it stays armed until manual reset (TODO M5+ if needed).
+/// reaches warn, it stays armed until manual reset (see `rearm()`).
 ///
 /// Atomic variant only; non-atomic variant for single-core no_std targets
 /// will land later. Gated by `cfg(target_has_atomic = "ptr")`.
@@ -206,7 +206,7 @@ impl<I: Allocator, H: WatermarkHandler> Watermark<I, H> {
     pub fn with_thresholds(inner: I, handler: H, thresholds: WatermarkThresholds) -> Self {
         // Snapshot capacity at construction. Watermark re-queries via the
         // capacity_bytes() method below so growing inners (e.g.
-        // ExtendableSlab in M7) report the live value to handlers.
+        // ExtendableSlab) report the live value to handlers.
         let capacity_bytes = inner.capacity_bytes().unwrap_or(usize::MAX);
         // Pre-compute the hot-path gate so `allocate` can skip the
         // `check_and_fire` call entirely while utilization is below
@@ -585,7 +585,7 @@ mod tests {
                 critical_pct: 100,
             },
         );
-        // 99% utilization — still below the 100% gate.
+        // ~97.6% utilization (1000/1024) — still below the 100% gate.
         let layout = NonZeroLayout::from_size_align(1000, 1).unwrap();
         let _ = w.allocate(layout).unwrap();
         assert_eq!(
@@ -620,13 +620,13 @@ mod tests {
     /// regression surfaces explicitly if that hardening is added.
     #[test]
     fn inverted_thresholds_hot_path_gate_does_not_suppress_critical() {
-        // Regression for the inverted-threshold suppression bug found in
-        // pass #5: with `critical_pct < warn_pct` (a config mistake but
-        // not rejected), the old warn-keyed hot-path gate sat ABOVE the
-        // critical line, so allocations whose utilization landed in
-        // [critical_pct, warn_pct) silently failed to fire critical.
-        // After the fix the gate is `min(warn_pct, critical_pct)`, so
-        // critical events surface as soon as they should.
+        // Regression for the inverted-threshold suppression bug: with
+        // `critical_pct < warn_pct` (a config mistake but not rejected),
+        // the old warn-keyed hot-path gate sat ABOVE the critical line, so
+        // allocations whose utilization landed in [critical_pct, warn_pct)
+        // silently failed to fire critical. After the fix the gate is
+        // `min(warn_pct, critical_pct)`, so critical events surface as
+        // soon as they should.
         let inner = BumpArena::new(InlineBacked::<1024>::new()).unwrap();
         let w = Watermark::with_thresholds(
             inner,

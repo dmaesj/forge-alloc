@@ -13,7 +13,7 @@
 //! bytes of prefix per allocation (used for displacement-header storage so
 //! `deallocate` can recover the inner pointer).
 //!
-//! See spec §9.2.
+//! See `docs/ARCHITECTURE.md` for the composable-wrapper design.
 
 use core::cell::Cell;
 use core::ptr::NonNull;
@@ -435,7 +435,7 @@ unsafe impl<I: Allocator> Deallocator for CacheJitter<I> {
                 // forward the user_ptr (inner doesn't own it). The
                 // standard hardened-allocator response to detected
                 // corruption is to abort with a diagnostic; matches
-                // Canary's policy and the M5 Quarantine flow.
+                // Canary's policy and the Quarantine corruption response.
                 //
                 // Diagnostic strategy: the observed header is logged so
                 // crash-reporter / core-dump scrape can correlate the

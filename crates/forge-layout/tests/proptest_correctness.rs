@@ -1,5 +1,5 @@
 //! Property-based correctness tests for `BumpArena`, `Slab`, and
-//! `WithFallback`. These exercise the invariants listed in spec §13:
+//! `WithFallback`. These exercise the invariants:
 //!
 //! Skipped under miri: proptest's runner calls `std::env::current_dir`
 //! for failure-persistence-file resolution, which miri's isolation

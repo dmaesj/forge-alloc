@@ -13,7 +13,7 @@
 //! (immediate content wipe), then quarantines the poisoned slot for 16
 //! cycles (delayed reuse).
 //!
-//! See spec §7.4.
+//! See `docs/ARCHITECTURE.md` for the composable-wrapper design.
 
 use core::cell::UnsafeCell;
 use core::ptr::NonNull;
@@ -83,7 +83,7 @@ struct QuarantinedBlock {
 /// `EPOCHS / active_sizes`. Recommended: place `Quarantine` INSIDE
 /// `SizeClassed` (`SizeClassed<Quarantine<Slab<T, _>, 16>, N>`) for
 /// per-class quarantine, OR keep `Quarantine` on a typed `Slab<T, _>` where
-/// all slots are the same size. See spec §7.4.
+/// all slots are the same size.
 ///
 /// # Inner exhaustion while items are quarantined
 ///
@@ -226,8 +226,8 @@ impl<I: Allocator, const EPOCHS: usize> Drop for Quarantine<I, EPOCHS> {
         // (e.g. `InlineBacked::storage`). Each `Block.ptr` was derived
         // from that SharedReadWrite tag during the earlier `allocate`
         // call; using it through `self.inner.deallocate(b.ptr, ...)` after
-        // the Unique retag is UB under SB. (Miri pass #7 caught the same
-        // class of bug in `SlabOwner`.)
+        // the Unique retag is UB under SB. (Miri caught the same class of
+        // bug in `SlabOwner`.)
         //
         // Work with raw pointers throughout the drain. The `&mut self`
         // signature is the Drop trait's; we are careful to never

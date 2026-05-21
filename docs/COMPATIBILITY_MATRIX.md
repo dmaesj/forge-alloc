@@ -129,7 +129,7 @@ point — they degrade quietly. Each entry says what the quiet degradation is.
 
 - **Status**: FG — observable overhead
 - **Cost**: `corruption_events()` on these allocators walks segments/classes under a mutex per call, adding ~5–10 ns + 1 ns/segment per allocate. `Statistics` polls `inner.corruption_events()` on every allocate/deallocate.
-- **Pass #8 hot-path audit** (P-2/P-3): LOW severity at v0.1 scale; deferrable to v2.0 when the inner allocators cache a per-instance corruption counter.
+- **Severity**: LOW at v0.1 scale; deferrable to v2.0 when the inner allocators cache a per-instance corruption counter.
 - **Workaround**: for high-throughput paths, wrap `Statistics` around `Slab` directly (which has an O(1) cached counter), not around `ExtendableSlab` / `SizeClassed`.
 
 ### 14. `SharedBumpArena<InlineBacked<N>>`
@@ -137,13 +137,13 @@ point — they degrade quietly. Each entry says what the quiet degradation is.
 - **Status**: FG — soundness rests on a documented `FixedRange` contract clause
 - **What works**: in-tree backings (`InlineBacked`, `MmapBacked`) where `FixedRange::base()` and `size()` are pure reads.
 - **What's risky**: a *user-implemented* `B: FixedRange` whose `base()` uses non-atomic interior mutability (e.g. lazy-init `Cell<NonNull<u8>>`) would race when wrapped here. `SharedBumpArena: Sync` is widened beyond `B: Sync` to `B: Send` for compatibility with `!Sync` backings like `InlineBacked`, which relies on the `FixedRange` contract clause that `base()`/`size()` be safe to call concurrently.
-- **Pass #7 Send/Sync audit** (R-1): LOW. The contract is documented; the widening is sound under it.
+- **Severity**: LOW. The contract is documented; the widening is sound under it.
 
 ### 15. `SlabOwner` used dealloc-only
 
-- **Status**: FIXED in `3378fc9a` (was FG)
+- **Status**: FIXED (was FG)
 - **Pre-fix behaviour**: a `SlabOwner` whose owner thread never `allocate`s but does deallocs (locally or via accumulated `SlabRemote` pushes) would never call `maybe_drain` — the remote queue grew unbounded.
-- **Post-fix**: `SlabOwner::deallocate` now calls `maybe_drain` (`try_lock`-gated, ~5–10 ns when empty). Confirmed by hot-path audit P-1; v2.0 cached AtomicUsize is the next optimisation (task `f8c34a`).
+- **Post-fix**: `SlabOwner::deallocate` now calls `maybe_drain` (`try_lock`-gated, ~5–10 ns when empty). A v2.0 cached `AtomicUsize` is the next optimisation.
 
 ### 16. `Quarantine<BumpArena>`
 
@@ -277,6 +277,5 @@ which we won't do mid-v0.1.
 ## Cross-references
 
 - [`COMPOSITION_RECIPES.md`](COMPOSITION_RECIPES.md) — recommended wirings with worked examples.
-- [`composable_allocator_spec.md`](composable_allocator_spec.md) — design rationale per layer.
+- [`ARCHITECTURE.md`](ARCHITECTURE.md) — the three-layer mental model.
 - Per-type `compile_fail` doctests pin items 1–6.
-- Open lux tasks `f8c34a` (perf), `4818da` (test coverage), `291cc6` (bench baseline).

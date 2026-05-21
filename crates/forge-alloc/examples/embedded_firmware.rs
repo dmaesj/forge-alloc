@@ -19,8 +19,8 @@
 //! ```
 //!
 //! Why this composition:
-//! - **`no_std`-compatible**: `Slab` and `InlineBacked` both live in
-//!   `forge-core` / `forge-backing` without the `std` feature. This
+//! - **`no_std`-compatible**: `Slab` (`forge-layout`) and `InlineBacked`
+//!   (`forge-backing`) both compile without the `std` feature. This
 //!   example uses `println!` for clarity; in real firmware, replace
 //!   with your platform's logging primitive (`defmt::info!`, RTT,
 //!   serial, etc.).

@@ -1,7 +1,7 @@
-//! Pass-#7 miri target battery.
+//! Miri target battery.
 //!
-//! Exercises every composition the audit prompt called out as
-//! "specifically test under miri". Each test is deterministic, single-
+//! Exercises the compositions that most benefit from UB checking
+//! under miri. Each test is deterministic, single-
 //! threaded, and uses `InlineBacked` so it can run end-to-end under
 //! `cargo +nightly miri test`. The compositions that *require*
 //! `MmapBacked` or `std::thread` are marked `#[cfg_attr(miri, ignore)]`
