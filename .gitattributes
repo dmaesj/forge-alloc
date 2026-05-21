@@ -1,0 +1,11 @@
+# Normalize line endings: LF in the repository on every platform.
+# Without this, contributors on Windows (core.autocrlf=true) would
+# commit CRLF and produce noisy cross-platform diffs.
+* text=auto eol=lf
+
+# Rust / TOML / Markdown / YAML are always text.
+*.rs    text eol=lf
+*.toml  text eol=lf
+*.md    text eol=lf
+*.yml   text eol=lf
+*.lock  text eol=lf
