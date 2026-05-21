@@ -215,8 +215,12 @@ fn dangling_for_align(align: usize) -> NonNull<u8> {
     // Invariants from a valid `Layout`: align is a power of two and non-zero,
     // so it is a valid pointer value.
     debug_assert!(align.is_power_of_two() && align != 0);
+    // The result is a ZST sentinel that is never dereferenced, so it carries
+    // no provenance; `without_provenance_mut` builds it as a bare address and
+    // keeps Miri's int-to-ptr provenance check quiet.
+    let ptr = core::ptr::without_provenance_mut::<u8>(align);
     // SAFETY: `align` is non-zero, so the resulting pointer is non-null.
-    unsafe { NonNull::new_unchecked(align as *mut u8) }
+    unsafe { NonNull::new_unchecked(ptr) }
 }
 
 unsafe impl<A: crate::Allocator> allocator_api2::alloc::Allocator for StdCompat<A> {

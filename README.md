@@ -74,7 +74,7 @@ to develop against.
 
 ## MSRV
 
-Rust 1.70 — `NonNull::slice_from_raw_parts` is stable since 1.70.
+Rust 1.84 — `core::ptr::without_provenance_mut` is stable since 1.84.
 
 ## License
 

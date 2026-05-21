@@ -7,7 +7,7 @@ exclude  = ["crates/forge-fuzz"]
 
 [workspace.package]
 edition      = "2021"
-rust-version = "1.70"
+rust-version = "1.84"
 license      = "MIT OR Apache-2.0"
 repository   = "https://github.com/dmaesj/forge-alloc"
 

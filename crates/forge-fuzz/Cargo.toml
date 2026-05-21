@@ -4,7 +4,7 @@ version     = "0.0.0"
 publish     = false
 description = "cargo-fuzz targets for the forge-alloc family — nightly only"
 edition     = "2021"
-rust-version = "1.70"
+rust-version = "1.84"
 license     = "MIT OR Apache-2.0"
 
 [package.metadata]
