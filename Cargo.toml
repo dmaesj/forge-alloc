@@ -1,0 +1,26 @@
+[workspace]
+resolver = "2"
+members  = ["crates/*"]
+# forge-fuzz requires nightly + cargo-fuzz; excluded from default workspace build.
+# To use: `cd crates/forge-fuzz && cargo +nightly fuzz run <target>`.
+exclude  = ["crates/forge-fuzz"]
+
+[workspace.package]
+edition      = "2021"
+rust-version = "1.70"
+license      = "MIT OR Apache-2.0"
+repository   = "https://github.com/dmaesj/forge-alloc"
+
+[workspace.lints.rust]
+# Register `kani` and `loom` as known cfg names so #[cfg(kani)] proof
+# harnesses and #[cfg(loom)] concurrency models don't trip the
+# (default-on since Rust 1.80) unexpected_cfgs lint.
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(kani)', 'cfg(loom)'] }
+
+[workspace.lints.clippy]
+incompatible_msrv = "warn"
+
+[profile.release]
+lto           = "thin"
+codegen-units = 1
+debug         = "line-tables-only"

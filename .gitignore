@@ -1,0 +1,26 @@
+# Rust build artifacts
+/target
+**/*.rs.bk
+*.pdb
+
+# Lux VCS metadata. `lux` is the primary local VCS; this git tree is the
+# public GitHub mirror, so lux's internal database is not part of it.
+/.lux/
+/.lux-wt/
+/.luxignore
+
+# Solis / kronos code-graph index (local tooling artifact)
+/.solis/
+
+# OS / editor cruft
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*~
+
+# Environment & secrets
+.env
+.env.*
+*.pem

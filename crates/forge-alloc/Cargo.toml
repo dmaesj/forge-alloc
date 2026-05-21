@@ -1,0 +1,45 @@
+[package]
+name        = "forge-alloc"
+version     = "0.1.0"
+description = "Composable memory allocator primitives — pay-for-what-you-use security hardening with zero-cost type-level composition"
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+repository.workspace   = true
+readme      = "README.md"
+keywords    = ["allocator", "memory", "no-std", "embedded", "security"]
+categories  = ["memory-management", "no-std"]
+
+[features]
+default = ["std"]
+std     = ["forge-core/std", "forge-backing/std", "forge-layout/std", "forge-hardening/std"]
+# Forwarded to forge-core's SipHashMAC.
+siphasher = ["forge-core/siphasher", "forge-layout/siphasher"]
+# Reserved for the real M11 ARM PAC instruction-level PacMAC. Currently a
+# stand-alone forwarding feature with no consumers — the stub type lives
+# behind `pac-stub`.
+pac       = ["forge-core/pac", "forge-layout/pac"]
+# Compile against the PacMAC stub (which panics at runtime). Never enable
+# in production — the real impl lands with M11.
+pac-stub  = ["forge-core/pac-stub"]
+# Reserved for forwarding to forge-backing / forge-hardening once those land.
+mte       = ["forge-backing/mte"]
+mpk       = ["forge-backing/mpk"]
+# (The `stats` feature was removed in v0.1.x — wrapping with `Statistics<I>`
+# is itself the opt-in and an unwrapped allocator costs zero; see forge-hardening
+# Cargo.toml and lux task 871f6c.)
+
+[dependencies]
+forge-core      = { version = "0.1.0", path = "../forge-core",      default-features = false }
+forge-backing   = { version = "0.1.0", path = "../forge-backing",   default-features = false }
+forge-layout    = { version = "0.1.0", path = "../forge-layout",    default-features = false }
+forge-hardening = { version = "0.1.0", path = "../forge-hardening", default-features = false }
+
+[dev-dependencies]
+proptest = "1"
+
+[lib]
+doctest = true
+
+[lints]
+workspace = true

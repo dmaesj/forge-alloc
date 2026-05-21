@@ -1,0 +1,39 @@
+[package]
+name        = "forge-backing"
+version     = "0.1.0"
+description = "Layer 1 backing primitives (InlineBacked, MmapBacked, System) for the forge-alloc family"
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+repository.workspace   = true
+keywords    = ["allocator", "memory", "no-std", "mmap"]
+categories  = ["memory-management", "no-std"]
+
+[features]
+default = ["std"]
+# Enables MmapBacked, System, and other OS-mapped primitives.
+std     = ["forge-core/std"]
+# Forwarded from forge-core (currently unused at this layer; reserved for M10).
+mte     = []
+# Forwarded from forge-core (currently unused at this layer; reserved for M11).
+mpk     = []
+
+[dependencies]
+forge-core        = { version = "0.1.0", path = "../forge-core", default-features = false }
+allocator-api2 = { version = "0.2", default-features = false, features = ["alloc"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = { version = "0.2", default-features = false }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = [
+    "Win32_Foundation",
+    "Win32_System_Memory",
+    "Win32_System_SystemInformation",
+] }
+
+[lib]
+doctest = true
+
+[lints]
+workspace = true

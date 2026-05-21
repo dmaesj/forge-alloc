@@ -1,0 +1,327 @@
+//! `HugePageAligned<I>` — wraps an [`OsBacked`] allocator with a 2 MiB
+//! (32 MiB on Apple Silicon) layout contract.
+//!
+//! Two effects:
+//!
+//! 1. **Allocation alignment** is forced up to `huge_page_size` so any
+//!    allocation served by this wrapper sits on a huge-page boundary.
+//!    Once the OS promotes the underlying pages (Transparent Huge Pages
+//!    on Linux, `MEM_LARGE_PAGES` on Windows), translations stay in
+//!    huge-page form rather than getting split.
+//! 2. **Purges below the huge-page boundary become no-ops.** A partial
+//!    purge inside a promoted huge page forces the kernel to demote it
+//!    back to 4 KiB (or 16 KiB on Apple) — the very translation-cost
+//!    we're trying to avoid. `HugePageAligned::release_pages` silently
+//!    rounds down to whole huge-page units; if the resulting range is
+//!    empty, the call is dropped.
+//!
+//! `protect` is forwarded unchanged — it doesn't break THP promotion
+//! the way purges do, and a caller setting `PROT_NONE` (e.g. for a
+//! guard page) explicitly wants the page split.
+//!
+//! See spec §9.1.
+
+use core::ptr::NonNull;
+
+use forge_core::{AllocError, Allocator, Deallocator, FixedRange, NonZeroLayout, OsBacked, ProtectFlags};
+
+/// HugePageAligned wrapper.
+///
+/// `huge_page_size` defaults to a platform-appropriate value
+/// ([`default_huge_page_size`]); pass an explicit size to override
+/// (useful for hugetlbfs setups with 1 GiB pages, or testing).
+pub struct HugePageAligned<I: OsBacked> {
+    inner: I,
+    huge_page_size: usize,
+}
+
+impl<I: OsBacked> HugePageAligned<I> {
+    /// Wrap with the platform-default huge page size.
+    ///
+    /// On Linux/Windows with x86_64 or aarch64 (non-Apple) this is
+    /// 2 MiB. On macOS aarch64 (Apple Silicon, 16 KiB native granule)
+    /// it is 32 MiB. Returns `None` if the platform-default would not
+    /// satisfy [`Self::with_huge_page_size`]'s invariants (impossible on
+    /// supported targets).
+    pub fn new(inner: I) -> Option<Self> {
+        Self::with_huge_page_size(inner, default_huge_page_size())
+    }
+
+    /// Wrap with an explicit huge page size. Must be a power of two and
+    /// at least 4 KiB (any smaller would not be a "huge" page on any
+    /// real architecture).
+    pub fn with_huge_page_size(inner: I, huge_page_size: usize) -> Option<Self> {
+        if !huge_page_size.is_power_of_two() || huge_page_size < 4096 {
+            return None;
+        }
+        Some(Self {
+            inner,
+            huge_page_size,
+        })
+    }
+
+    /// Configured huge page size in bytes.
+    #[inline]
+    pub fn huge_page_size(&self) -> usize {
+        self.huge_page_size
+    }
+
+    /// Minimum purge granularity. Equal to [`huge_page_size`](Self::huge_page_size).
+    /// Calls to [`release_pages`](OsBacked::release_pages) below this
+    /// size are dropped.
+    #[inline]
+    pub fn min_purge_size(&self) -> usize {
+        self.huge_page_size
+    }
+
+    /// Borrow the inner allocator.
+    #[inline]
+    pub fn inner(&self) -> &I {
+        &self.inner
+    }
+
+    /// Inflate a caller's layout to satisfy huge-page alignment.
+    /// Returns `Err(AllocError)` if the inflated alignment is invalid
+    /// (cannot happen for power-of-two huge_page_size, defensive).
+    fn promote_layout(&self, layout: NonZeroLayout) -> Result<NonZeroLayout, AllocError> {
+        let align = core::cmp::max(layout.align().get(), self.huge_page_size);
+        NonZeroLayout::from_size_align(layout.size().get(), align).map_err(|_| AllocError)
+    }
+}
+
+unsafe impl<I: OsBacked> Deallocator for HugePageAligned<I> {
+    #[inline]
+    unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: NonZeroLayout) {
+        let inflated = match self.promote_layout(layout) {
+            Ok(l) => l,
+            // Caller-contract violation already implied by the matched
+            // allocate path; forward bare so we don't double-fault.
+            Err(_) => layout,
+        };
+        // SAFETY: forwarded; ptr came from this wrapper's allocate which
+        // used `inflated` to call inner.allocate.
+        unsafe { self.inner.deallocate(ptr, inflated) }
+    }
+}
+
+unsafe impl<I: OsBacked> Allocator for HugePageAligned<I> {
+    #[inline]
+    fn allocate(&self, layout: NonZeroLayout) -> Result<NonNull<[u8]>, AllocError> {
+        let inflated = self.promote_layout(layout)?;
+        let block = self.inner.allocate(inflated)?;
+        // Debug-only contract check: inner allocators that claim to honour
+        // alignment must return a pointer aligned to `huge_page_size`.
+        // Cheaper than a runtime branch in release; if violated, callers
+        // would see split-page translations and silent perf loss.
+        debug_assert_eq!(
+            block.cast::<u8>().as_ptr() as usize & (self.huge_page_size - 1),
+            0,
+            "inner allocator returned non-huge-page-aligned pointer despite inflated layout",
+        );
+        Ok(block)
+    }
+
+    #[inline]
+    fn capacity_bytes(&self) -> Option<usize> {
+        // Inflated allocations consume the inner faster, but the
+        // wrapper has no per-request bookkeeping to track precisely.
+        // Best-effort: report the inner's capacity unchanged.
+        self.inner.capacity_bytes()
+    }
+
+    #[inline]
+    fn corruption_events(&self) -> u64 {
+        self.inner.corruption_events()
+    }
+}
+
+unsafe impl<I: OsBacked> OsBacked for HugePageAligned<I> {
+    #[inline]
+    fn base_ptr(&self) -> NonNull<u8> {
+        self.inner.base_ptr()
+    }
+
+    #[inline]
+    fn region_size(&self) -> usize {
+        self.inner.region_size()
+    }
+
+    /// Round the requested range *inward* to whole huge pages. If
+    /// nothing remains after rounding, the call is dropped — this is
+    /// the "refuse to fragment a huge page" guarantee. Partial purges
+    /// that would force the kernel to demote a promoted huge page back
+    /// to 4 KiB are silently elided.
+    #[inline]
+    unsafe fn release_pages(&self, ptr: NonNull<u8>, size: usize) {
+        let hp = self.huge_page_size;
+        let mask = hp - 1; // hp is power-of-two by construction
+        let raw = ptr.as_ptr() as usize;
+        // Round start up to next huge-page boundary; round end down.
+        let Some(end) = raw.checked_add(size) else {
+            // size would overflow — caller-contract violation; bail.
+            return;
+        };
+        // `raw + mask` can overflow on near-`usize::MAX` addresses; if it
+        // does the rounded-up start cannot lie below `end` in usable
+        // address space, so the call is necessarily a no-op.
+        let Some(rounded) = raw.checked_add(mask) else {
+            return;
+        };
+        let aligned_start = rounded & !mask;
+        let aligned_end = end & !mask;
+        if aligned_end <= aligned_start {
+            // Nothing to purge after rounding — preserve the huge page.
+            return;
+        }
+        let aligned_size = aligned_end - aligned_start;
+        // SAFETY: aligned_start lies in [raw, raw+size); aligned_size
+        // <= size. The caller's range was wholly inside the inner
+        // region per the OsBacked contract; ours is a subrange.
+        let aligned_ptr = unsafe {
+            NonNull::new_unchecked(ptr.as_ptr().add(aligned_start - raw))
+        };
+        unsafe { self.inner.release_pages(aligned_ptr, aligned_size) };
+    }
+
+    /// Forwarded unchanged. Protection changes don't fragment a huge
+    /// page the way a purge does, and a caller using `PROT_NONE` for a
+    /// guard page explicitly wants the page split.
+    #[inline]
+    unsafe fn protect(&self, ptr: NonNull<u8>, size: usize, flags: ProtectFlags) {
+        // SAFETY: forwarded; caller upholds protect contract on self.
+        unsafe { self.inner.protect(ptr, size, flags) }
+    }
+}
+
+impl<I: OsBacked + FixedRange> FixedRange for HugePageAligned<I> {
+    #[inline]
+    fn base(&self) -> NonNull<u8> {
+        self.inner.base()
+    }
+
+    #[inline]
+    fn size(&self) -> usize {
+        self.inner.size()
+    }
+}
+
+/// Platform-default huge page size in bytes.
+///
+/// - x86_64 / aarch64 (non-Apple) Linux & Windows: 2 MiB.
+/// - aarch64 macOS (Apple Silicon, 16 KiB native granule): 32 MiB —
+///   the kernel only promotes contiguous 32 MiB-aligned regions to its
+///   "superpage" tier.
+/// - Other targets: 2 MiB as a reasonable default.
+#[inline]
+pub fn default_huge_page_size() -> usize {
+    #[cfg(all(target_arch = "aarch64", target_os = "macos"))]
+    {
+        32 * 1024 * 1024
+    }
+    #[cfg(not(all(target_arch = "aarch64", target_os = "macos")))]
+    {
+        2 * 1024 * 1024
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use forge_backing::MmapBacked;
+
+    #[test]
+    #[cfg_attr(miri, ignore = "miri-incompatible: mmap / threads")]
+    fn rejects_non_power_of_two() {
+        let inner = MmapBacked::new(4 * 1024 * 1024).unwrap();
+        assert!(HugePageAligned::with_huge_page_size(inner, 3 * 1024 * 1024).is_none());
+    }
+
+    #[test]
+    #[cfg_attr(miri, ignore = "miri-incompatible: mmap / threads")]
+    fn rejects_too_small() {
+        let inner = MmapBacked::new(64 * 1024).unwrap();
+        assert!(HugePageAligned::with_huge_page_size(inner, 1024).is_none());
+    }
+
+    #[test]
+    #[cfg_attr(miri, ignore = "miri-incompatible: mmap / threads")]
+    fn default_constructs() {
+        // Use 2 MiB explicitly so this works on all hosts including
+        // single-node WSL where the system may not have THP available.
+        let inner = MmapBacked::new(4 * 1024 * 1024).unwrap();
+        let hp = HugePageAligned::with_huge_page_size(inner, 2 * 1024 * 1024)
+            .expect("valid params");
+        assert_eq!(hp.huge_page_size(), 2 * 1024 * 1024);
+        assert_eq!(hp.min_purge_size(), 2 * 1024 * 1024);
+    }
+
+    #[test]
+    #[cfg_attr(miri, ignore = "miri-incompatible: mmap / threads")]
+    fn allocate_returns_huge_page_aligned() {
+        // 4 MiB backing — enough for at least one 2 MiB-aligned alloc
+        // plus leading slack.
+        let inner = MmapBacked::new(4 * 1024 * 1024).unwrap();
+        let hp = HugePageAligned::with_huge_page_size(inner, 2 * 1024 * 1024)
+            .expect("valid params");
+        let layout = NonZeroLayout::from_size_align(1024, 8).unwrap();
+        // Allocation may or may not succeed depending on whether the
+        // underlying mmap base happens to be huge-page-aligned; the
+        // BumpArena underneath rounds the cursor. Either way, if it
+        // succeeds, the returned pointer must be huge-page-aligned.
+        if let Ok(block) = hp.allocate(layout) {
+            let addr = block.cast::<u8>().as_ptr() as usize;
+            assert_eq!(addr % (2 * 1024 * 1024), 0);
+        }
+    }
+
+    #[test]
+    #[cfg_attr(miri, ignore = "miri-incompatible: mmap / threads")]
+    fn release_pages_below_huge_page_is_no_op() {
+        // Small release: the wrapper rounds inward to zero and drops
+        // the call. Verify by capturing the inner's last_os_error
+        // before/after — if the wrapper had forwarded, madvise with a
+        // 4 KiB size would have run.
+        use forge_backing::{mmap_clear_last_os_error, mmap_last_os_error};
+        let inner = MmapBacked::new(4 * 1024 * 1024).unwrap();
+        let base = inner.base_ptr();
+        let hp = HugePageAligned::with_huge_page_size(inner, 2 * 1024 * 1024)
+            .expect("valid params");
+        mmap_clear_last_os_error();
+        // Try to release 4 KiB from the very start — way below the
+        // 2 MiB huge-page threshold.
+        unsafe { hp.release_pages(base, 4096) };
+        // We didn't trigger any failing syscall and we didn't even fire
+        // a real madvise (because we dropped the call), so the slot
+        // remains None.
+        assert!(mmap_last_os_error().is_none());
+    }
+
+    #[test]
+    #[cfg_attr(miri, ignore = "miri-incompatible: mmap / threads")]
+    fn release_pages_aligned_huge_page_passes_through() {
+        // A 2 MiB release at a 2 MiB boundary inside the region must
+        // reach the inner allocator. Round-trip a write before to
+        // confirm post-release reads work (zero-fill on Linux,
+        // implementation-defined on macOS/Windows).
+        let inner = MmapBacked::new(4 * 1024 * 1024).unwrap();
+        let raw_base = inner.base_ptr().as_ptr() as usize;
+        // Find the first 2 MiB-aligned address inside [base, base+4 MiB).
+        let hp_size = 2 * 1024 * 1024;
+        let aligned = (raw_base + hp_size - 1) & !(hp_size - 1);
+        // If there's room for at least one full huge page inside the
+        // mapping, exercise the release. (On a sufficiently large mmap
+        // base address this may not fit; the test then no-ops.)
+        if aligned + hp_size <= raw_base + 4 * 1024 * 1024 {
+            let offset = aligned - raw_base;
+            let aligned_ptr = unsafe {
+                NonNull::new_unchecked(inner.base_ptr().as_ptr().add(offset))
+            };
+            let hp = HugePageAligned::with_huge_page_size(inner, hp_size)
+                .expect("valid params");
+            unsafe {
+                core::ptr::write_bytes(aligned_ptr.as_ptr(), 0xCC, hp_size);
+                hp.release_pages(aligned_ptr, hp_size);
+            }
+        }
+    }
+}

@@ -1,0 +1,263 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+jobs:
+  # ----------------------------------------------------------------
+  # Stable: build / test / clippy / fmt across the workspace.
+  # ----------------------------------------------------------------
+  stable:
+    name: stable (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+
+      - name: cargo fmt --check
+        run: cargo fmt --all -- --check
+
+      - name: cargo check (default features)
+        run: cargo check --workspace --all-targets
+
+      - name: cargo check (all features)
+        run: cargo check --workspace --all-targets --all-features
+
+      - name: cargo test (default features)
+        run: cargo test --workspace
+
+      - name: cargo test (all features)
+        run: cargo test --workspace --all-features
+
+      - name: cargo clippy
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+      - name: cargo doc (no broken intra-doc links)
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: cargo doc --workspace --all-features --no-deps
+
+  # ----------------------------------------------------------------
+  # no_std surface check: forge-core + forge-layout must compile without std.
+  # This catches accidental `use std::...` in the no_std-compatible
+  # crates that `cargo test --all-features` would silently miss.
+  # ----------------------------------------------------------------
+  no_std:
+    name: no_std surface
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: cargo check -p forge-core (no_std)
+        run: cargo check -p forge-core --no-default-features --tests
+
+      - name: cargo check -p forge-layout (no_std)
+        run: cargo check -p forge-layout --no-default-features --tests
+
+      - name: cargo check -p forge-hardening (no_std)
+        run: cargo check -p forge-hardening --no-default-features --tests
+
+  # ----------------------------------------------------------------
+  # Benchmark compile check. Verifies the `forge-bench` criterion
+  # targets still COMPILE in the optimized `bench` profile. The
+  # benches are NOT run here — criterion wall-clock numbers are
+  # noise on shared CI runners; the instruction-counted regression
+  # gate lives in the separate `codspeed.yml` workflow.
+  #
+  # Value over the `cargo check --all-targets` in the `stable` job:
+  # `--no-run` does full optimized codegen + link, catching post-
+  # monomorphization / optimized-only errors and bench-harness API
+  # bit-rot that a dev-profile `cargo check` can miss. `--all-features`
+  # so the `siphasher`-gated composition cases are covered too.
+  # ----------------------------------------------------------------
+  bench_compile:
+    name: bench compile check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: bench-compile
+
+      - name: cargo bench --no-run (all features)
+        run: cargo bench --no-run -p forge-bench --all-features
+
+  # ----------------------------------------------------------------
+  # MIRI: validates unsafe blocks against the stricter abstract
+  # machine. Runs on nightly only — MIRI is a nightly-only tool.
+  # Excluded targets: anything that exercises real OS syscalls
+  # (mmap, madvise, mbind, …) since MIRI doesn't model those.
+  # ----------------------------------------------------------------
+  miri:
+    name: miri
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: miri, rust-src
+      - uses: Swatinem/rust-cache@v2
+
+      - name: cargo miri setup
+        run: cargo miri setup
+
+      - name: miri test forge-core
+        run: cargo miri test -p forge-core --all-features
+
+      - name: miri test forge-backing (InlineBacked only — mmap is OS-only)
+        run: cargo miri test -p forge-backing --no-default-features inline
+
+      - name: miri test forge-layout
+        # Most forge-layout tests use InlineBacked (no syscalls); the std
+        # feature pulls in MmapBacked-backed tests that miri can't run.
+        # Run with --no-default-features to skip those.
+        run: cargo miri test -p forge-layout --no-default-features
+
+      - name: miri test forge-hardening (no_std subset)
+        run: cargo miri test -p forge-hardening --no-default-features
+
+      - name: miri test forge-alloc (miri_targets harness + InlineBacked compositions)
+        # The pass #7 miri_targets.rs harness and nrvo_defeat.rs battery
+        # live here. mmap/thread-dependent tests are individually gated
+        # with `#[cfg_attr(miri, ignore)]` (assumes default features so
+        # `MmapBacked` is in scope); proptest_inline_backed.rs and
+        # proptest_corruption.rs are module-gated `#![cfg(not(miri))]`.
+        run: cargo miri test -p forge-alloc
+
+  # ----------------------------------------------------------------
+  # Cross-compile smoke checks. `cargo check` (NOT test) against
+  # non-host targets — verifies the code compiles for the target's
+  # rustc but does not link or execute. Catches accidental
+  # std-only API use in no_std-capable crates, libc symbol
+  # mismatches in MmapBacked across architectures, and similar
+  # portability regressions.
+  #
+  # Two matrix groups:
+  #   - workspace_targets: hosted-std targets (aarch64-linux,
+  #     x86_64-musl). Full workspace check.
+  #   - no_std_targets: bare-metal + WASM (thumbv7em, wasm32).
+  #     Only the no_std-capable crates (forge-core, forge-layout,
+  #     forge-hardening) with --no-default-features.
+  # ----------------------------------------------------------------
+  cross_compile_workspace:
+    name: cross-compile (workspace, ${{ matrix.target }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - aarch64-unknown-linux-gnu
+          - x86_64-unknown-linux-musl
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: cross-${{ matrix.target }}
+
+      # `--workspace` (lib only, no --all-targets). Cross-compile is a
+      # smoke check for library portability; the test/bench/example
+      # surface pulls in dev-dependencies (proptest, criterion) that
+      # don't all cross-compile cleanly. Lib-only is the right scope.
+      - name: cargo check workspace (--target ${{ matrix.target }})
+        run: cargo check --workspace --target ${{ matrix.target }}
+
+      - name: cargo check workspace (all features, --target ${{ matrix.target }})
+        run: cargo check --workspace --all-features --target ${{ matrix.target }}
+
+  cross_compile_no_std:
+    name: cross-compile (no_std, ${{ matrix.target }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - thumbv7em-none-eabihf
+          - wasm32-unknown-unknown
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: cross-${{ matrix.target }}
+
+      # Bare-metal / wasm portability matrix.
+      #
+      # All three no_std crates compile here: counter atomics use
+      # `AtomicUsize` (not `AtomicU64`), so 32-bit-atomic-only targets
+      # like `thumbv7em-none-eabihf` (Cortex-M4) and pre-atomics
+      # `wasm32-unknown-unknown` work without `portable-atomic` shimming.
+      # See `Slab::corruption_events` / `AllocStats.*` for the rationale
+      # and the lossless `usize → u64` widening at trait boundaries.
+      - name: cargo check forge-core (--no-default-features)
+        run: cargo check -p forge-core --no-default-features --target ${{ matrix.target }}
+      - name: cargo check forge-layout (--no-default-features)
+        run: cargo check -p forge-layout --no-default-features --target ${{ matrix.target }}
+      - name: cargo check forge-hardening (--no-default-features)
+        run: cargo check -p forge-hardening --no-default-features --target ${{ matrix.target }}
+
+  # ----------------------------------------------------------------
+  # Loom: c11 memory-model permutation testing on the concurrent
+  # surface (SharedBumpArena CAS, SlabOwner/SlabRemote close-flag
+  # race, ExtendableSlab hint). Models live in
+  # crates/forge-layout/tests/loom_concurrency.rs gated `#![cfg(loom)]`.
+  # ----------------------------------------------------------------
+  loom:
+    name: loom (concurrency models)
+    runs-on: ubuntu-latest
+    env:
+      RUSTFLAGS: --cfg loom
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          # `--cfg loom` produces a distinct build artifact; isolate
+          # from the regular cache to avoid spurious rebuilds.
+          key: loom
+
+      - name: loom test forge-layout (loom_concurrency)
+        run: cargo test -p forge-layout --test loom_concurrency
+
+  # ----------------------------------------------------------------
+  # Kani: bounded model checking on a subset of unsafe code paths.
+  # Currently a placeholder — proof harnesses land in M13.x as
+  # individual #[kani::proof] functions are added to BumpArena +
+  # Slab. The kani-verifier action will fail loudly if any proof
+  # is broken.
+  # ----------------------------------------------------------------
+  kani:
+    name: kani (advisory)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: model-checking/kani-github-action@v1.1
+        with:
+          enable-default-checks: true
+          # Kani proof harnesses live in `forge-layout` and use
+          # `forge_backing::InlineBacked`; forge-backing is gated behind the
+          # `std` feature in forge-layout, so default features must stay on
+          # for the proof modules to compile.
+          args: -p forge-layout

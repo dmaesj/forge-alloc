@@ -1,0 +1,46 @@
+[package]
+name        = "forge-bench"
+version     = "0.1.0"
+publish     = false
+description = "Criterion baseline benchmarks for the forge-alloc family"
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+repository.workspace   = true
+
+[lib]
+path = "src/lib.rs"
+doctest = false
+
+[features]
+# Forward to forge-core/forge-layout so SipHashMAC + HardenedSlab variants
+# compile in the composition_tradeoffs bench.
+siphasher = ["forge-core/siphasher", "forge-layout/siphasher"]
+
+[dependencies]
+forge-core      = { version = "0.1.0", path = "../forge-core" }
+forge-backing   = { version = "0.1.0", path = "../forge-backing" }
+forge-layout    = { version = "0.1.0", path = "../forge-layout" }
+forge-hardening = { version = "0.1.0", path = "../forge-hardening" }
+
+[dev-dependencies]
+# `codspeed-criterion-compat` is a drop-in for `criterion`: the `package =`
+# rename keeps every `use criterion::...` in the bench files unchanged.
+# When run under `cargo codspeed` it switches to CodSpeed's deterministic
+# instruction-counting harness (zero hardware-variance — the right tool
+# for a regression gate on shared CI runners); a plain `cargo bench` is a
+# passthrough and behaves exactly like upstream criterion (wall-clock +
+# HTML reports). See .github/workflows/codspeed.yml.
+criterion = { package = "codspeed-criterion-compat", version = "4", features = ["html_reports"] }
+
+[[bench]]
+name    = "alloc_throughput"
+harness = false
+
+[[bench]]
+name    = "adaptive_batch"
+harness = false
+
+[[bench]]
+name    = "composition_tradeoffs"
+harness = false

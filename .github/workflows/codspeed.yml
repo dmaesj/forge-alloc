@@ -1,0 +1,55 @@
+name: CodSpeed
+
+# Continuous benchmarking via CodSpeed (https://codspeed.io).
+#
+# Why a separate workflow from ci.yml: criterion wall-clock numbers are
+# meaningless as a regression gate on shared GitHub-hosted runners —
+# runner-to-runner CPU variance routinely exceeds 10-20%, which drowns
+# the sub-nanosecond deltas that matter for allocator hot paths. CodSpeed
+# runs the benchmarks under a deterministic instruction-counting harness
+# (cachegrind-style): the same input always yields the same instruction
+# count, so hardware variance is eliminated and a real >N% regression
+# gate becomes possible. The `forge-bench` crate uses the
+# `codspeed-criterion-compat` drop-in (see crates/forge-bench/Cargo.toml);
+# a plain local `cargo bench` is unaffected and still produces wall-clock
+# HTML reports.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  # Lets CodSpeed trigger a backtest run to seed the initial baseline.
+  workflow_dispatch:
+
+# Optional for public repositories — CodSpeed allows tokenless OIDC
+# uploads for public repos, so no CODSPEED_TOKEN secret is required.
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  codspeed:
+    name: Run benchmarks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Rust toolchain, cache, and cargo-codspeed
+        uses: moonrepo/setup-rust@v1
+        with:
+          channel: stable
+          cache-target: release
+          bins: cargo-codspeed
+
+      # `--features siphasher` so the composition_tradeoffs bench's
+      # SipHashMAC + HardenedSlab cases (the most expensive hardening
+      # tier) are part of the regression gate, not just the cheap
+      # compositions.
+      - name: Build the benchmark targets
+        run: cargo codspeed build -p forge-bench --features siphasher
+
+      - name: Run the benchmarks
+        uses: CodSpeedHQ/action@v4
+        with:
+          mode: simulation
+          run: cargo codspeed run
