@@ -60,8 +60,8 @@ pub use backing::{InlineBacked, MAX_ALIGN};
 #[cfg(feature = "std")]
 #[doc(inline)]
 pub use backing::{
-    mmap_clear_last_os_error, mmap_last_os_error, mmap_record_os_error, MmapBacked, MmapFlags,
-    System,
+    mmap_clear_last_os_error, mmap_last_os_error, mmap_record_os_error, page_size, MmapBacked,
+    MmapFlags, System,
 };
 
 #[doc(inline)]

@@ -54,8 +54,8 @@
 //!   pool (hot path).
 
 use forge_alloc::{
-    Allocator, BumpArena, Deallocator, GuardPage, HardenedSlab, MmapBacked, NonZeroLayout, Slab,
-    SplitMetadata,
+    page_size, Allocator, BumpArena, Deallocator, GuardPage, HardenedSlab, MmapBacked,
+    NonZeroLayout, Slab, SplitMetadata,
 };
 
 // ============================================================================
@@ -102,7 +102,7 @@ fn main() {
     // Audit log (cold-tier, security-hardened).
     let audit_backing = GuardPage::new(
         SplitMetadata::new(MmapBacked::new(4 * 1024 * 1024).unwrap(), 64 * 1024).unwrap(),
-        4096,
+        page_size(),
     )
     .unwrap();
     let audit: AuditLog = Slab::new(1024, audit_backing).unwrap();

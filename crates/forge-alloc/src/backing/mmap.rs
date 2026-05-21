@@ -369,8 +369,12 @@ unsafe impl Send for MmapBacked {}
 // Platform glue
 // ============================================================================
 
+/// The OS memory page size in bytes — 4 KiB on most x86-64, 16 KiB on
+/// Apple Silicon. Pass this where a primitive needs a page-size argument
+/// (such as `GuardPage`) rather than hard-coding a value that is wrong
+/// on 16 KiB-page platforms.
 #[cfg(unix)]
-fn page_size() -> usize {
+pub fn page_size() -> usize {
     // SAFETY: sysconf is async-signal-safe and always returns >= 0 for
     // _SC_PAGESIZE on conforming Unix; we still fall back defensively when
     // the call reports -1 (errno) so `with_flags` cannot hit `page - 1`
@@ -388,8 +392,12 @@ fn page_size() -> usize {
     }
 }
 
+/// The OS memory page size in bytes — 4 KiB on most x86-64, 16 KiB on
+/// Apple Silicon. Pass this where a primitive needs a page-size argument
+/// (such as `GuardPage`) rather than hard-coding a value that is wrong
+/// on 16 KiB-page platforms.
 #[cfg(windows)]
-fn page_size() -> usize {
+pub fn page_size() -> usize {
     use windows_sys::Win32::System::SystemInformation::{GetSystemInfo, SYSTEM_INFO};
     // SAFETY: GetSystemInfo writes a fully-initialized SYSTEM_INFO into its
     // out-pointer; we provide a stack slot of the correct size.

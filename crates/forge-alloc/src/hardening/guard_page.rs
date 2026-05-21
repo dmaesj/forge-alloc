@@ -189,11 +189,7 @@ unsafe impl<I: OsBacked + Send> Send for GuardPage<I> {}
 #[cfg(feature = "std")]
 mod tests {
     use super::*;
-    use crate::backing::MmapBacked;
-
-    fn page_size() -> usize {
-        4096
-    }
+    use crate::backing::{page_size, MmapBacked};
 
     #[test]
     #[cfg_attr(miri, ignore = "miri-incompatible: mmap / threads")]
@@ -246,7 +242,7 @@ mod tests {
     #[test]
     #[cfg_attr(miri, ignore = "miri-incompatible: mmap / threads")]
     fn allocate_rejects_oversized_request() {
-        let inner = MmapBacked::new(16 * 1024).unwrap();
+        let inner = MmapBacked::new(64 * 1024).unwrap();
         let g = GuardPage::new(inner, page_size()).unwrap();
         let huge = NonZeroLayout::from_size_align(64 * 1024, 1).unwrap();
         assert!(g.allocate(huge).is_err());

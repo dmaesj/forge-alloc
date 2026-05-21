@@ -61,7 +61,7 @@ fn hardened_slab() {
         128,
         GuardPage::new(
             SplitMetadata::new(MmapBacked::new(256 * 1024).unwrap(), 16 * 1024).unwrap(),
-            4096,
+            page_size(),
         )
         .unwrap(),
     )

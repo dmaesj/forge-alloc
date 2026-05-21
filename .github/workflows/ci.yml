@@ -119,12 +119,13 @@ jobs:
         # miri is a nightly-only component.
         run: cargo +nightly miri test -p forge-alloc-core --all-features
 
-      - name: miri test forge-alloc
-        # The miri_targets.rs harness and nrvo_defeat.rs battery live
-        # here. mmap/thread-dependent tests are individually gated with
-        # `#[cfg_attr(miri, ignore)]`; proptest_inline_backed.rs and
-        # proptest_corruption.rs are module-gated `#![cfg(not(miri))]`.
-        run: cargo +nightly miri test -p forge-alloc
+      - name: miri test forge-alloc (curated batteries)
+        # The lib's own unit tests are NOT run under miri — many exercise
+        # real syscalls (mmap, getcpu) miri cannot model. Run the two
+        # integration tests written to be miri-safe: the miri_targets
+        # harness and the nrvo_defeat move-safety battery. Their mmap /
+        # thread tests are gated `#[cfg_attr(miri, ignore)]`.
+        run: cargo +nightly miri test -p forge-alloc --test miri_targets --test nrvo_defeat
 
   # ----------------------------------------------------------------
   # Cross-compile smoke checks. `cargo check` (NOT test) against

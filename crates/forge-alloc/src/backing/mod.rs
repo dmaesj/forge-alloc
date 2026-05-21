@@ -28,5 +28,6 @@ pub use system::System;
 mod mmap;
 #[cfg(feature = "std")]
 pub use mmap::{
-    mmap_clear_last_os_error, mmap_last_os_error, mmap_record_os_error, MmapBacked, MmapFlags,
+    mmap_clear_last_os_error, mmap_last_os_error, mmap_record_os_error, page_size, MmapBacked,
+    MmapFlags,
 };

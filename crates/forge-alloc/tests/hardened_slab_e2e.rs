@@ -8,7 +8,8 @@
 #![cfg(feature = "std")]
 
 use forge_alloc::{
-    Allocator, Deallocator, GuardPage, HardenedSlab, MmapBacked, NonZeroLayout, Slab, SplitMetadata,
+    page_size, Allocator, Deallocator, GuardPage, HardenedSlab, MmapBacked, NonZeroLayout, Slab,
+    SplitMetadata,
 };
 
 /// Build a HardenedSlab over 256 u64 slots.
@@ -21,7 +22,7 @@ fn build_pool() -> HardenedSlab<u64> {
     // 2. Separate metadata region.
     let split = SplitMetadata::new(data_mmap, 16 * 1024).expect("meta region");
     // 3. Guard pages around the data region.
-    let guarded = GuardPage::new(split, 4096).expect("guard page wrap");
+    let guarded = GuardPage::new(split, page_size()).expect("guard page wrap");
     // 4. Typed slab on top.
     Slab::<u64, _>::new(128, guarded).expect("slab construction")
 }
