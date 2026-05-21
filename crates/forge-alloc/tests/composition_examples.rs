@@ -22,7 +22,8 @@ fn stack_local_scratch() {
 fn cross_thread_bump_arena() {
     use std::sync::Arc;
     type Shared = Arc<SharedBumpArena<MmapBacked>>;
-    let arena: Shared = Arc::new(SharedBumpArena::new(MmapBacked::new(64 * 1024).unwrap()).unwrap());
+    let arena: Shared =
+        Arc::new(SharedBumpArena::new(MmapBacked::new(64 * 1024).unwrap()).unwrap());
     let layout = NonZeroLayout::from_size_align(64, 8).unwrap();
     let _block = arena.allocate(layout).unwrap();
 }
@@ -73,8 +74,10 @@ fn bounded_heap_with_overflow_fallback() {
     // 64 KiB inline arena (the recipe doc uses 1 MiB but that overflows the
     // default Windows test thread stack; the shape is the same).
     type Fast = WithFallback<BumpArena<InlineBacked<{ 64 * 1024 }>>, System>;
-    let alloc: Fast =
-        WithFallback::new(BumpArena::new(InlineBacked::<{ 64 * 1024 }>::new()).unwrap(), System);
+    let alloc: Fast = WithFallback::new(
+        BumpArena::new(InlineBacked::<{ 64 * 1024 }>::new()).unwrap(),
+        System,
+    );
     let layout = NonZeroLayout::from_size_align(64, 8).unwrap();
     let _block = alloc.allocate(layout).unwrap();
 }
@@ -126,7 +129,11 @@ fn observable_production_stack() {
     for _ in 0..13 {
         ptrs.push(pool.allocate(layout).unwrap());
     }
-    assert_eq!(warn_count.load(Ordering::Relaxed), 1, "warn should fire once");
+    assert_eq!(
+        warn_count.load(Ordering::Relaxed),
+        1,
+        "warn should fire once"
+    );
     assert_eq!(
         critical_count.load(Ordering::Relaxed),
         0,
@@ -171,11 +178,7 @@ fn numa_local_huge_page_arena() {
     let backing = MmapBacked::new(2 * 1024 * 1024 + 4096).unwrap();
     // Use 2 MiB huge pages (spec default elsewhere; we pick explicit here for testability).
     let huge = HugePageAligned::with_huge_page_size(backing, 2 * 1024 * 1024).unwrap();
-    let numa = NumaLocal::new(
-        huge,
-        NumaPolicy::Bind(NodeSet::single(0).unwrap()),
-    )
-    .unwrap();
+    let numa = NumaLocal::new(huge, NumaPolicy::Bind(NodeSet::single(0).unwrap())).unwrap();
     let arena = BumpArena::new(numa).unwrap();
     // arena may or may not satisfy a 2 MiB-aligned allocation depending on the
     // underlying mmap base; just verify it compiles + constructs.
@@ -248,9 +251,21 @@ fn statistics_over_poison_over_slab_accounts_outer_layout() {
     ));
     let layout = NonZeroLayout::for_type::<u64>().unwrap();
     let p = stats.allocate(layout).unwrap();
-    assert_eq!(stats.stats().bytes_allocated.load(std::sync::atomic::Ordering::Relaxed), 8);
+    assert_eq!(
+        stats
+            .stats()
+            .bytes_allocated
+            .load(std::sync::atomic::Ordering::Relaxed),
+        8
+    );
     unsafe { stats.deallocate(p.cast(), layout) };
-    assert_eq!(stats.stats().bytes_allocated.load(std::sync::atomic::Ordering::Relaxed), 0);
+    assert_eq!(
+        stats
+            .stats()
+            .bytes_allocated
+            .load(std::sync::atomic::Ordering::Relaxed),
+        0
+    );
 }
 
 #[test]
@@ -263,11 +278,9 @@ fn quarantine_over_poison_over_slab_round_trips() {
     //   - allocate / deallocate without panic,
     //   - leave the slab reclaimable on drop (Quarantine drains).
     {
-        let q: Quarantine<PoisonOnFree<Slab<u64, _>>, 4> = Quarantine::new(
-            PoisonOnFree::new(
-                Slab::<u64, _>::new(8, MmapBacked::new(4 * 1024).unwrap()).unwrap(),
-            ),
-        );
+        let q: Quarantine<PoisonOnFree<Slab<u64, _>>, 4> = Quarantine::new(PoisonOnFree::new(
+            Slab::<u64, _>::new(8, MmapBacked::new(4 * 1024).unwrap()).unwrap(),
+        ));
         let layout = NonZeroLayout::for_type::<u64>().unwrap();
         let a = q.allocate(layout).unwrap();
         unsafe { q.deallocate(a.cast(), layout) };
@@ -282,9 +295,8 @@ fn quarantine_holds_slot_until_slab_exhaustion() {
     // allocated. If the program exhausts Slab while items wait in
     // Quarantine, `allocate` returns AllocError — this is the documented
     // behavior and the test pins it.
-    let q: Quarantine<Slab<u64, _>, 16> = Quarantine::new(
-        Slab::<u64, _>::new(2, MmapBacked::new(4 * 1024).unwrap()).unwrap(),
-    );
+    let q: Quarantine<Slab<u64, _>, 16> =
+        Quarantine::new(Slab::<u64, _>::new(2, MmapBacked::new(4 * 1024).unwrap()).unwrap());
     let layout = NonZeroLayout::for_type::<u64>().unwrap();
     let a = q.allocate(layout).unwrap();
     let _b = q.allocate(layout).unwrap();
@@ -316,10 +328,8 @@ fn watermark_over_with_fallback_monitors_primary_only() {
     });
 
     type Fast = WithFallback<BumpArena<InlineBacked<1024>>, System>;
-    let fast: Fast = WithFallback::new(
-        BumpArena::new(InlineBacked::<1024>::new()).unwrap(),
-        System,
-    );
+    let fast: Fast =
+        WithFallback::new(BumpArena::new(InlineBacked::<1024>::new()).unwrap(), System);
     // Watermark sees capacity = 1024 (primary only).
     assert_eq!(fast.capacity_bytes(), Some(1024));
     let w = Watermark::with_thresholds(fast, handler, WatermarkThresholds::default());
@@ -327,7 +337,11 @@ fn watermark_over_with_fallback_monitors_primary_only() {
     // Fill primary to 80% (820 bytes) — past the 75% warn.
     let layout = NonZeroLayout::from_size_align(820, 1).unwrap();
     let _ = w.allocate(layout).unwrap();
-    assert_eq!(warn_count.load(Ordering::Relaxed), 1, "primary-side warn must fire");
+    assert_eq!(
+        warn_count.load(Ordering::Relaxed),
+        1,
+        "primary-side warn must fire"
+    );
 
     // Now overflow to secondary. Watermark's `allocated` counter keeps
     // climbing (it counts ALL allocations through the wrapper), but the
@@ -366,9 +380,19 @@ fn observability_wrappers_compose_over_system() {
         let s = Statistics::new(System);
         let layout = NonZeroLayout::from_size_align(64, 8).unwrap();
         let block = s.allocate(layout).expect("System alloc via Statistics");
-        assert_eq!(s.stats().total_allocations.load(core::sync::atomic::Ordering::Relaxed), 1);
+        assert_eq!(
+            s.stats()
+                .total_allocations
+                .load(core::sync::atomic::Ordering::Relaxed),
+            1
+        );
         unsafe { s.deallocate(block.cast(), layout) };
-        assert_eq!(s.stats().total_deallocations.load(core::sync::atomic::Ordering::Relaxed), 1);
+        assert_eq!(
+            s.stats()
+                .total_deallocations
+                .load(core::sync::atomic::Ordering::Relaxed),
+            1
+        );
     }
     // Watermark<System, _>: System has `capacity_bytes() == None`, so
     // Watermark's threshold model degrades to a no-op handler — but the
@@ -401,11 +425,9 @@ fn poison_persists_in_user_region_past_freelink_with_quarantine_wrap() {
     // This pins the documented `PoisonOnFree<Quarantine<Slab>>` security
     // property from `crates/forge-hardening/src/poison.rs` — the "maximum
     // poison persistence" recipe.
-    let pof: PoisonOnFree<Quarantine<Slab<u64, _>, 4>> = PoisonOnFree::new(
-        Quarantine::new(
-            Slab::<u64, _>::new(8, MmapBacked::new(4 * 1024).unwrap()).unwrap(),
-        ),
-    );
+    let pof: PoisonOnFree<Quarantine<Slab<u64, _>, 4>> = PoisonOnFree::new(Quarantine::new(
+        Slab::<u64, _>::new(8, MmapBacked::new(4 * 1024).unwrap()).unwrap(),
+    ));
     let layout = NonZeroLayout::for_type::<u64>().unwrap();
     let block = pof.allocate(layout).unwrap();
     let ptr = block.cast::<u8>();

@@ -4,9 +4,9 @@
 //! the freelist push/pop machinery looking for double-free / use-after-free
 //! detection via the MAC verify (with NoProtection, MAC is constant 0).
 
-use forge_backing::InlineBacked;
-use forge_core::{Allocator, Deallocator, NoProtection, NonZeroLayout};
-use forge_layout::Slab;
+use forge_alloc::InlineBacked;
+use forge_alloc::{Allocator, Deallocator, NoProtection, NonZeroLayout};
+use forge_alloc::Slab;
 use arbitrary::Arbitrary;
 use libfuzzer_sys::fuzz_target;
 

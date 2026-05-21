@@ -22,8 +22,7 @@ use forge_alloc::{
 /// Round-trip allocate / deallocate must not violate SB / TB.
 #[test]
 fn slab_inline_alloc_dealloc_cycle() {
-    let slab: Slab<u64, InlineBacked<512>> =
-        Slab::new(8, InlineBacked::<512>::new()).unwrap();
+    let slab: Slab<u64, InlineBacked<512>> = Slab::new(8, InlineBacked::<512>::new()).unwrap();
     let layout = NonZeroLayout::for_type::<u64>().unwrap();
     let a = slab.allocate(layout).unwrap();
     let b = slab.allocate(layout).unwrap();
@@ -92,15 +91,17 @@ fn generational_slab_insert_get_remove() {
     // Re-insert; the slot is recycled but with a new generation.
     let h2 = slab.insert(7u64).unwrap();
     assert_eq!(*slab.get(h2).unwrap(), 7);
-    assert!(slab.get(h0).is_none(), "stale handle still rejected after recycle");
+    assert!(
+        slab.get(h0).is_none(),
+        "stale handle still rejected after recycle"
+    );
 }
 
 /// `Statistics<Slab<u64, InlineBacked<512>>>` — count tracking +
 /// verify allocate / deallocate pairs balance.
 #[test]
 fn statistics_slab_count_and_verify() {
-    let slab: Slab<u64, InlineBacked<512>> =
-        Slab::new(8, InlineBacked::<512>::new()).unwrap();
+    let slab: Slab<u64, InlineBacked<512>> = Slab::new(8, InlineBacked::<512>::new()).unwrap();
     let stats = Statistics::new(slab);
     let layout = NonZeroLayout::for_type::<u64>().unwrap();
     let a = stats.allocate(layout).unwrap();
@@ -141,8 +142,7 @@ fn canary_over_bump_arena_round_trips() {
 /// can't, because Slab.deallocate runs AFTER PoisonOnFree.deallocate).
 #[test]
 fn poison_on_free_slab_round_trips() {
-    let slab: Slab<u64, InlineBacked<512>> =
-        Slab::new(8, InlineBacked::<512>::new()).unwrap();
+    let slab: Slab<u64, InlineBacked<512>> = Slab::new(8, InlineBacked::<512>::new()).unwrap();
     let poison: PoisonOnFree<Slab<u64, InlineBacked<512>>> = PoisonOnFree::new(slab);
     let layout = NonZeroLayout::for_type::<u64>().unwrap();
     let block = poison.allocate(layout).unwrap();
@@ -179,8 +179,7 @@ fn slab_owner_inline_single_thread_round_trips() {
 /// mutability without creating a Unique retag over the inline storage.
 #[test]
 fn statistics_poison_slab_inline_round_trips() {
-    let slab: Slab<u64, InlineBacked<512>> =
-        Slab::new(8, InlineBacked::<512>::new()).unwrap();
+    let slab: Slab<u64, InlineBacked<512>> = Slab::new(8, InlineBacked::<512>::new()).unwrap();
     let poison = PoisonOnFree::new(slab);
     let stats = Statistics::new(poison);
     let layout = NonZeroLayout::for_type::<u64>().unwrap();

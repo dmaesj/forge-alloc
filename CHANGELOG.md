@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed (crate consolidation)
+- The workspace was consolidated from five published crates to two.
+  `forge-backing`, `forge-layout`, and `forge-hardening` are now modules
+  (`backing`, `layout`, `hardening`) of the `forge-alloc` crate; the
+  trait-contract crate is published as `forge-alloc-core` (renamed from
+  `forge-core`, which was unavailable on crates.io). The public API is
+  unchanged — `use forge_alloc::*` exposes exactly the same surface, with
+  `forge-alloc-core` re-exported.
+
 ### Added (M9 — performance hardening)
 - `CacheJitter<I>` — randomized per-allocation displacement (xorshift64-derived)
   to spread metadata across cache associativity sets. Header at `user_ptr - 8`

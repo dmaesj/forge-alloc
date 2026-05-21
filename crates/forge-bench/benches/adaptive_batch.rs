@@ -24,16 +24,16 @@
 //! 3. After the benchmark group finishes we signal the remotes to
 //!    stop and join.
 
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
-use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main, Throughput};
+use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 
-use forge_backing::MmapBacked;
-use forge_core::{Allocator, Deallocator, NonZeroLayout};
-use forge_layout::{BatchPolicy, SlabOwner};
+use forge_alloc::MmapBacked;
+use forge_alloc::{Allocator, Deallocator, NonZeroLayout};
+use forge_alloc::{BatchPolicy, SlabOwner};
 
 /// Run a single policy with a long-lived owner + 2 remote senders.
 fn run_policy(c: &mut Criterion, group_name: &str, policy: BatchPolicy) {

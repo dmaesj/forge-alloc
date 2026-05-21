@@ -121,9 +121,7 @@ fn main() {
             // SAFETY: ptr_addr came from audio_owner.allocate, which we
             // received via the channel. We're the only consumer of this
             // event; deallocating returns its slot to the owner's queue.
-            let ptr = unsafe {
-                core::ptr::NonNull::new_unchecked(ptr_addr as *mut u8)
-            };
+            let ptr = unsafe { core::ptr::NonNull::new_unchecked(ptr_addr as *mut u8) };
             unsafe { audio_remote.deallocate(ptr, layout) };
             events_processed += 1;
         }

@@ -4,9 +4,9 @@
 //! deallocate or secondary's real deallocate, with no leak / no
 //! double-free.
 
-use forge_backing::{InlineBacked, System};
-use forge_core::{Allocator, Deallocator, FixedRange, NonZeroLayout};
-use forge_layout::WithFallback;
+use forge_alloc::{InlineBacked, System};
+use forge_alloc::{Allocator, Deallocator, FixedRange, NonZeroLayout};
+use forge_alloc::WithFallback;
 use arbitrary::Arbitrary;
 use libfuzzer_sys::fuzz_target;
 

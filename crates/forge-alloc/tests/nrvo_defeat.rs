@@ -229,12 +229,7 @@ fn pin_stack_alloc_inline_backed_survives_move() {
 fn build_size_classed_inline() -> SizeClassed<InlineBacked<2048>, 2> {
     // InlineBacked's MAX_ALIGN is 16, so we can only use class sizes <= 16
     // (each class needs alignment == stride). Use [8, 16] with 16 slots.
-    SizeClassed::with_class_sizes(
-        InlineBacked::<2048>::new(),
-        [8, 16],
-        16,
-    )
-    .unwrap()
+    SizeClassed::with_class_sizes(InlineBacked::<2048>::new(), [8, 16], 16).unwrap()
 }
 
 #[test]

@@ -54,7 +54,7 @@
 //!   freelist semantics.
 
 use forge_alloc::{
-    Allocator, AllocStats, Deallocator, MmapBacked, NonZeroLayout, NullHandler, Quarantine, Slab,
+    AllocStats, Allocator, Deallocator, MmapBacked, NonZeroLayout, NullHandler, Quarantine, Slab,
     Statistics, Watermark,
 };
 use std::sync::atomic::Ordering;
@@ -63,8 +63,7 @@ use std::sync::atomic::Ordering;
 // Composition type alias
 // ============================================================================
 
-type TokenPool =
-    Statistics<Watermark<Quarantine<Slab<Token, MmapBacked>, 4>, NullHandler>>;
+type TokenPool = Statistics<Watermark<Quarantine<Slab<Token, MmapBacked>, 4>, NullHandler>>;
 
 // ============================================================================
 // Domain types
@@ -85,9 +84,7 @@ struct Token {
 
 fn build_pool() -> TokenPool {
     Statistics::new(Watermark::new(
-        Quarantine::<_, 4>::new(
-            Slab::new(1024, MmapBacked::new(1 << 20).unwrap()).unwrap(),
-        ),
+        Quarantine::<_, 4>::new(Slab::new(1024, MmapBacked::new(1 << 20).unwrap()).unwrap()),
         NullHandler,
     ))
 }
@@ -137,9 +134,7 @@ fn main() {
     // few revoked slots return to the inner slab; the rest are still
     // in the quarantine ring. New allocs come from the inner's
     // next_uncarved region.
-    let _more: Vec<_> = (0..5)
-        .map(|_| pool.allocate(layout).unwrap())
-        .collect();
+    let _more: Vec<_> = (0..5).map(|_| pool.allocate(layout).unwrap()).collect();
     println!("\nissued 5 more after revoke (some come from new slots, not reused):");
     report("post-reissue", pool.stats());
 

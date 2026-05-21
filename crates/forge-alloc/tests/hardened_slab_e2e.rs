@@ -68,7 +68,10 @@ fn distinct_live_allocations_dont_overlap() {
         ptrs.push(pool.allocate(layout).expect("alloc"));
     }
     // All addresses distinct.
-    let mut sorted: Vec<usize> = ptrs.iter().map(|p| p.cast::<u8>().as_ptr() as usize).collect();
+    let mut sorted: Vec<usize> = ptrs
+        .iter()
+        .map(|p| p.cast::<u8>().as_ptr() as usize)
+        .collect();
     sorted.sort();
     for w in sorted.windows(2) {
         assert_ne!(w[0], w[1], "HardenedSlab returned duplicate pointer");

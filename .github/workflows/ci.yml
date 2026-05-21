@@ -52,9 +52,9 @@ jobs:
         run: cargo doc --workspace --all-features --no-deps
 
   # ----------------------------------------------------------------
-  # no_std surface check: forge-core + forge-layout must compile without std.
-  # This catches accidental `use std::...` in the no_std-compatible
-  # crates that `cargo test --all-features` would silently miss.
+  # no_std surface check: both library crates must compile without
+  # std. Catches accidental `use std::...` (or a prelude-only `Vec`,
+  # `Box`, …) that `cargo test --all-features` would silently miss.
   # ----------------------------------------------------------------
   no_std:
     name: no_std surface
@@ -64,14 +64,11 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
 
-      - name: cargo check -p forge-core (no_std)
-        run: cargo check -p forge-core --no-default-features --tests
+      - name: cargo check -p forge-alloc-core (no_std)
+        run: cargo check -p forge-alloc-core --no-default-features --tests
 
-      - name: cargo check -p forge-layout (no_std)
-        run: cargo check -p forge-layout --no-default-features --tests
-
-      - name: cargo check -p forge-hardening (no_std)
-        run: cargo check -p forge-hardening --no-default-features --tests
+      - name: cargo check -p forge-alloc (no_std)
+        run: cargo check -p forge-alloc --no-default-features --tests
 
   # ----------------------------------------------------------------
   # Benchmark compile check. Verifies the `forge-bench` criterion
@@ -102,8 +99,9 @@ jobs:
   # ----------------------------------------------------------------
   # MIRI: validates unsafe blocks against the stricter abstract
   # machine. Runs on nightly only — MIRI is a nightly-only tool.
-  # Excluded targets: anything that exercises real OS syscalls
-  # (mmap, madvise, mbind, …) since MIRI doesn't model those.
+  # OS-syscall-dependent tests (mmap, madvise, mbind, …) are gated
+  # `#[cfg_attr(miri, ignore)]` in-tree, so a default-feature run is
+  # safe to launch directly.
   # ----------------------------------------------------------------
   miri:
     name: miri
@@ -115,29 +113,13 @@ jobs:
           components: miri, rust-src
       - uses: Swatinem/rust-cache@v2
 
-      - name: cargo miri setup
-        run: cargo miri setup
+      - name: miri test forge-alloc-core
+        run: cargo miri test -p forge-alloc-core --all-features
 
-      - name: miri test forge-core
-        run: cargo miri test -p forge-core --all-features
-
-      - name: miri test forge-backing (InlineBacked only — mmap is OS-only)
-        run: cargo miri test -p forge-backing --no-default-features inline
-
-      - name: miri test forge-layout
-        # Most forge-layout tests use InlineBacked (no syscalls); the std
-        # feature pulls in MmapBacked-backed tests that miri can't run.
-        # Run with --no-default-features to skip those.
-        run: cargo miri test -p forge-layout --no-default-features
-
-      - name: miri test forge-hardening (no_std subset)
-        run: cargo miri test -p forge-hardening --no-default-features
-
-      - name: miri test forge-alloc (miri_targets harness + InlineBacked compositions)
-        # The pass #7 miri_targets.rs harness and nrvo_defeat.rs battery
-        # live here. mmap/thread-dependent tests are individually gated
-        # with `#[cfg_attr(miri, ignore)]` (assumes default features so
-        # `MmapBacked` is in scope); proptest_inline_backed.rs and
+      - name: miri test forge-alloc
+        # The miri_targets.rs harness and nrvo_defeat.rs battery live
+        # here. mmap/thread-dependent tests are individually gated with
+        # `#[cfg_attr(miri, ignore)]`; proptest_inline_backed.rs and
         # proptest_corruption.rs are module-gated `#![cfg(not(miri))]`.
         run: cargo miri test -p forge-alloc
 
@@ -145,16 +127,14 @@ jobs:
   # Cross-compile smoke checks. `cargo check` (NOT test) against
   # non-host targets — verifies the code compiles for the target's
   # rustc but does not link or execute. Catches accidental
-  # std-only API use in no_std-capable crates, libc symbol
-  # mismatches in MmapBacked across architectures, and similar
-  # portability regressions.
+  # std-only API use in no_std-capable code, libc symbol mismatches
+  # in MmapBacked across architectures, and similar portability
+  # regressions.
   #
-  # Two matrix groups:
-  #   - workspace_targets: hosted-std targets (aarch64-linux,
-  #     x86_64-musl). Full workspace check.
-  #   - no_std_targets: bare-metal + WASM (thumbv7em, wasm32).
-  #     Only the no_std-capable crates (forge-core, forge-layout,
-  #     forge-hardening) with --no-default-features.
+  #   - cross_compile_workspace: hosted-std targets (aarch64-linux,
+  #     x86_64-musl). Full workspace lib check.
+  #   - cross_compile_no_std: bare-metal + WASM (thumbv7em, wasm32).
+  #     Library crates with --no-default-features.
   # ----------------------------------------------------------------
   cross_compile_workspace:
     name: cross-compile (workspace, ${{ matrix.target }})
@@ -204,24 +184,20 @@ jobs:
 
       # Bare-metal / wasm portability matrix.
       #
-      # All three no_std crates compile here: counter atomics use
+      # Both library crates compile here: counter atomics use
       # `AtomicUsize` (not `AtomicU64`), so 32-bit-atomic-only targets
       # like `thumbv7em-none-eabihf` (Cortex-M4) and pre-atomics
       # `wasm32-unknown-unknown` work without `portable-atomic` shimming.
-      # See `Slab::corruption_events` / `AllocStats.*` for the rationale
-      # and the lossless `usize → u64` widening at trait boundaries.
-      - name: cargo check forge-core (--no-default-features)
-        run: cargo check -p forge-core --no-default-features --target ${{ matrix.target }}
-      - name: cargo check forge-layout (--no-default-features)
-        run: cargo check -p forge-layout --no-default-features --target ${{ matrix.target }}
-      - name: cargo check forge-hardening (--no-default-features)
-        run: cargo check -p forge-hardening --no-default-features --target ${{ matrix.target }}
+      - name: cargo check forge-alloc-core (--no-default-features)
+        run: cargo check -p forge-alloc-core --no-default-features --target ${{ matrix.target }}
+      - name: cargo check forge-alloc (--no-default-features)
+        run: cargo check -p forge-alloc --no-default-features --target ${{ matrix.target }}
 
   # ----------------------------------------------------------------
   # Loom: c11 memory-model permutation testing on the concurrent
   # surface (SharedBumpArena CAS, SlabOwner/SlabRemote close-flag
   # race, ExtendableSlab hint). Models live in
-  # crates/forge-layout/tests/loom_concurrency.rs gated `#![cfg(loom)]`.
+  # crates/forge-alloc/tests/loom_concurrency.rs gated `#![cfg(loom)]`.
   # ----------------------------------------------------------------
   loom:
     name: loom (concurrency models)
@@ -237,15 +213,13 @@ jobs:
           # from the regular cache to avoid spurious rebuilds.
           key: loom
 
-      - name: loom test forge-layout (loom_concurrency)
-        run: cargo test -p forge-layout --test loom_concurrency
+      - name: loom test (loom_concurrency)
+        run: cargo test -p forge-alloc --test loom_concurrency
 
   # ----------------------------------------------------------------
   # Kani: bounded model checking on a subset of unsafe code paths.
-  # Currently a placeholder — proof harnesses land in M13.x as
-  # individual #[kani::proof] functions are added to BumpArena +
-  # Slab. The kani-verifier action will fail loudly if any proof
-  # is broken.
+  # The kani-verifier action fails loudly if any `#[kani::proof]`
+  # harness is broken. Advisory — does not gate the merge.
   # ----------------------------------------------------------------
   kani:
     name: kani (advisory)
@@ -256,8 +230,4 @@ jobs:
       - uses: model-checking/kani-github-action@v1.1
         with:
           enable-default-checks: true
-          # Kani proof harnesses live in `forge-layout` and use
-          # `forge_backing::InlineBacked`; forge-backing is gated behind the
-          # `std` feature in forge-layout, so default features must stay on
-          # for the proof modules to compile.
-          args: -p forge-layout
+          args: -p forge-alloc

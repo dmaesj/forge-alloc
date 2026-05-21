@@ -28,10 +28,10 @@
 
 use core::ptr::NonNull;
 
+use forge_alloc::BumpArena;
 use forge_alloc::{
     Allocator, CacheJitter, Canary, Deallocator, MmapBacked, NonZeroLayout, Quarantine,
 };
-use forge_layout::BumpArena;
 
 use proptest::prelude::*;
 
@@ -369,8 +369,8 @@ proptest! {
 #[cfg(feature = "siphasher")]
 mod siphash_corruption {
     use super::*;
-    use forge_core::SipHashMAC;
-    use forge_layout::Slab;
+    use forge_alloc::SipHashMAC;
+    use forge_alloc::Slab;
 
     /// Construct a Slab<u64, _, SipHashMAC> with `cap` slots backed
     /// by MmapBacked. Uses a fixed key so repro is deterministic.
@@ -547,7 +547,7 @@ proptest! {
         // Build a Slab<u8, ...> wrapped in Quarantine<_, 4>.
         // u8 forces block_stride = 8 (FreeLink minimum) so we have a
         // predictable layout to mutate.
-        let inner = forge_layout::Slab::<u64, _>::new(
+        let inner = forge_alloc::Slab::<u64, _>::new(
             16,
             forge_alloc::InlineBacked::<2048>::new(),
         )
@@ -600,7 +600,7 @@ proptest! {
     fn quarantine_eviction_returns_bytes_unmodified(
         write_pattern in 0x10u8..0xFE,
     ) {
-        let inner = forge_layout::Slab::<u64, _>::new(
+        let inner = forge_alloc::Slab::<u64, _>::new(
             16,
             forge_alloc::InlineBacked::<2048>::new(),
         )

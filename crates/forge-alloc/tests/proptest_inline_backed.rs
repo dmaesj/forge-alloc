@@ -806,8 +806,8 @@ proptest! {
 // ============================================================================
 
 #[inline(never)]
-fn build_stats_watermark_slab(
-) -> Statistics<Watermark<Slab<u64, InlineBacked<2048>>, NullHandler>> {
+fn build_stats_watermark_slab() -> Statistics<Watermark<Slab<u64, InlineBacked<2048>>, NullHandler>>
+{
     Statistics::new(Watermark::new(
         Slab::new(64, InlineBacked::<2048>::new()).unwrap(),
         NullHandler,
@@ -871,10 +871,8 @@ proptest! {
 // ============================================================================
 
 #[inline(never)]
-fn build_split_stats_fallback() -> WithFallback<
-    Statistics<BumpArena<InlineBacked<256>>>,
-    Statistics<System>,
-> {
+fn build_split_stats_fallback(
+) -> WithFallback<Statistics<BumpArena<InlineBacked<256>>>, Statistics<System>> {
     WithFallback::new(
         Statistics::new(BumpArena::new(InlineBacked::<256>::new()).unwrap()),
         Statistics::new(System),
@@ -947,9 +945,8 @@ proptest! {
 // ============================================================================
 
 #[inline(never)]
-fn build_poison_quarantine_slab() -> forge_alloc::PoisonOnFree<
-    forge_alloc::Quarantine<Slab<u64, InlineBacked<2048>>, 4>,
-> {
+fn build_poison_quarantine_slab(
+) -> forge_alloc::PoisonOnFree<forge_alloc::Quarantine<Slab<u64, InlineBacked<2048>>, 4>> {
     forge_alloc::PoisonOnFree::new(forge_alloc::Quarantine::new(
         Slab::new(64, InlineBacked::<2048>::new()).unwrap(),
     ))

@@ -35,21 +35,23 @@
 //! fully-hardened variants. Without the feature those rows are absent
 //! from the report.
 
-use criterion::{black_box, criterion_group, criterion_main, BatchSize, BenchmarkGroup, Criterion, Throughput};
 use criterion::measurement::WallTime;
-
-use forge_backing::{MmapBacked, System};
-use forge_core::{Allocator, NonZeroLayout};
-use forge_hardening::{
-    Canary, CacheJitter, NullHandler, PoisonOnFree, Quarantine, Statistics, Watermark,
+use criterion::{
+    black_box, criterion_group, criterion_main, BatchSize, BenchmarkGroup, Criterion, Throughput,
 };
 
+use forge_alloc::{Allocator, NonZeroLayout};
+use forge_alloc::{
+    CacheJitter, Canary, NullHandler, PoisonOnFree, Quarantine, Statistics, Watermark,
+};
+use forge_alloc::{MmapBacked, System};
+
+use forge_alloc::{BumpArena, SizeClassed, Slab};
 #[cfg(feature = "siphasher")]
-use forge_hardening::{GuardPage, SplitMetadata};
-use forge_layout::{BumpArena, SizeClassed, Slab};
+use forge_alloc::{GuardPage, SplitMetadata};
 
 #[cfg(feature = "siphasher")]
-use forge_core::SipHashMAC;
+use forge_alloc::SipHashMAC;
 
 // 256 round-trips per iteration. Chosen so:
 // - the slab's LIFO freelist reaches steady state by iteration ~4

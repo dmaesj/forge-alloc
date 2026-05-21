@@ -40,9 +40,9 @@ use forge_alloc::{Allocator, Deallocator, InlineBacked, NonZeroLayout, Slab};
 struct SensorReading {
     timestamp_us: u64,
     sensor_id: u32,
-    value_q16: i32,        // fixed-point Q16.16
+    value_q16: i32, // fixed-point Q16.16
     flags: u32,
-    _reserved: [u8; 12],   // pad to 32 B total
+    _reserved: [u8; 12], // pad to 32 B total
 }
 
 const ARENA_BYTES: usize = 8 * 1024; // 8 KiB — fits 256 × 32 B
@@ -57,7 +57,12 @@ fn main() {
     // Pool lives on the stack — in a real firmware, this would be a
     // `static` or in a fixed RAM region.
     let pool: SensorPool = Slab::new(POOL_CAPACITY, InlineBacked::<ARENA_BYTES>::new()).unwrap();
-    println!("pool: {} slots × {} B = {} B used", POOL_CAPACITY, 32, POOL_CAPACITY * 32);
+    println!(
+        "pool: {} slots × {} B = {} B used",
+        POOL_CAPACITY,
+        32,
+        POOL_CAPACITY * 32
+    );
 
     let layout = NonZeroLayout::for_type::<SensorReading>().unwrap();
 

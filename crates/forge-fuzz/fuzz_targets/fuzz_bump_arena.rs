@@ -3,9 +3,9 @@
 //! allocation requests interleaved with resets. Verifies the no-overlap
 //! invariant: no two live allocations overlap.
 
-use forge_backing::InlineBacked;
-use forge_core::{Allocator, NonZeroLayout};
-use forge_layout::BumpArena;
+use forge_alloc::InlineBacked;
+use forge_alloc::{Allocator, NonZeroLayout};
+use forge_alloc::BumpArena;
 use arbitrary::Arbitrary;
 use libfuzzer_sys::fuzz_target;
 

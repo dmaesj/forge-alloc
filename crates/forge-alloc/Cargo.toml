@@ -12,31 +12,41 @@ categories  = ["memory-management", "no-std"]
 
 [features]
 default = ["std"]
-std     = ["forge-core/std", "forge-backing/std", "forge-layout/std", "forge-hardening/std"]
-# Forwarded to forge-core's SipHashMAC.
-siphasher = ["forge-core/siphasher", "forge-layout/siphasher"]
-# Reserved for the real M11 ARM PAC instruction-level PacMAC. Currently a
-# stand-alone forwarding feature with no consumers — the stub type lives
-# behind `pac-stub`.
-pac       = ["forge-core/pac", "forge-layout/pac"]
-# Compile against the PacMAC stub (which panics at runtime). Never enable
-# in production — the real impl lands with M11.
-pac-stub  = ["forge-core/pac-stub"]
-# Reserved for forwarding to forge-backing / forge-hardening once those land.
-mte       = ["forge-backing/mte"]
-mpk       = ["forge-backing/mpk"]
-# (The `stats` feature was removed in v0.1.x — wrapping with `Statistics<I>`
-# is itself the opt-in and an unwrapped allocator costs zero; see forge-hardening
-# Cargo.toml and lux task 871f6c.)
+std       = ["forge-alloc-core/std"]
+# Enables the SipHash-1-3 keyed MAC (`SipHashMAC`) for slab freelist integrity.
+siphasher = ["forge-alloc-core/siphasher"]
+# ARM PAC (`PacMAC`) keyed freelist MAC — real implementation reserved for a
+# future release; see `forge-alloc-core`.
+pac       = ["forge-alloc-core/pac"]
+# Compile against the PacMAC stub (panics at runtime — never use in production).
+pac-stub  = ["forge-alloc-core/pac-stub"]
+# Reserved, currently no-op (future ARM MTE / x86 MPK hardware tagging).
+mte       = []
+mpk       = []
 
 [dependencies]
-forge-core      = { version = "0.1.0", path = "../forge-core",      default-features = false }
-forge-backing   = { version = "0.1.0", path = "../forge-backing",   default-features = false }
-forge-layout    = { version = "0.1.0", path = "../forge-layout",    default-features = false }
-forge-hardening = { version = "0.1.0", path = "../forge-hardening", default-features = false }
+forge-alloc-core = { version = "0.1.0", path = "../forge-alloc-core", default-features = false }
+allocator-api2   = { version = "0.2", default-features = false, features = ["alloc"] }
+# Constant-time compare for canary / MAC verification.
+subtle           = { version = "2.5", default-features = false }
+
+[target.'cfg(unix)'.dependencies]
+libc = { version = "0.2", default-features = false }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = [
+    "Win32_Foundation",
+    "Win32_System_Memory",
+    "Win32_System_SystemInformation",
+] }
 
 [dev-dependencies]
 proptest = "1"
+
+# Loom permutation-testing concurrency model checker — compiled in only
+# under `RUSTFLAGS=--cfg loom` for the `loom_concurrency` integration test.
+[target.'cfg(loom)'.dev-dependencies]
+loom = "0.7"
 
 [lib]
 doctest = true

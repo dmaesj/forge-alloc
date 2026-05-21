@@ -5,17 +5,21 @@
 //! compile-time-enforced guarantees, and pay-for-what-you-use security
 //! hardening.
 //!
-//! This is the **meta-crate** of the forge-alloc family. It re-exports the
-//! union of:
+//! `forge-alloc` bundles the three implementation layers as modules:
 //!
-//! - `forge-core` — trait contracts and `NonZeroLayout`
-//! - `forge-backing` — Layer 1 backing primitives
-//! - `forge-layout` — Layer 2 layout primitives
-//! - `forge-hardening` — Layer 3 hardening wrappers
+//! - **backing** — Layer 1: raw memory sources — [`InlineBacked`],
+//!   [`MmapBacked`], [`System`].
+//! - **layout** — Layer 2: structure over a backing — [`BumpArena`], [`Slab`],
+//!   [`SizeClassed`], [`StackAlloc`], [`WithFallback`], and more.
+//! - **hardening** — Layer 3: security & observability wrappers — [`Canary`],
+//!   [`PoisonOnFree`], [`Quarantine`], [`GuardPage`], [`Statistics`], and more.
 //!
-//! Users who want the full surface depend on `forge-alloc`. Users who only
-//! need a subset can depend directly on the relevant `forge-*` crate to minimise
-//! compile time and dependency footprint.
+//! The trait contracts ([`Allocator`], [`Deallocator`], [`OsBacked`],
+//! [`FixedRange`], [`FreelistProtection`], [`NonZeroLayout`], and the rest)
+//! live in the companion [`forge-alloc-core`] crate and are re-exported here,
+//! so a single `forge-alloc` dependency gives you the whole surface.
+//!
+//! [`forge-alloc-core`]: https://docs.rs/forge-alloc-core
 //!
 //! # Quick start
 //!
@@ -39,63 +43,70 @@
 //! [`COMPOSITION_RECIPES.md`]: https://github.com/dmaesj/forge-alloc/blob/main/docs/COMPOSITION_RECIPES.md
 
 #![cfg_attr(not(feature = "std"), no_std)]
+#![deny(unsafe_op_in_unsafe_fn)]
 #![warn(missing_docs)]
 
-pub use forge_core::*;
+extern crate alloc;
+
+mod backing;
+mod hardening;
+mod layout;
+
+pub use forge_alloc_core::*;
 
 #[doc(inline)]
-pub use forge_backing::{InlineBacked, MAX_ALIGN};
+pub use backing::{InlineBacked, MAX_ALIGN};
 
 #[cfg(feature = "std")]
 #[doc(inline)]
-pub use forge_backing::{
+pub use backing::{
     mmap_clear_last_os_error, mmap_last_os_error, mmap_record_os_error, MmapBacked, MmapFlags,
     System,
 };
 
 #[doc(inline)]
-pub use forge_layout::{
+pub use layout::{
     BumpArena, BumpDeallocator, GenerationInt, GenerationalSlab, Handle, SizeClassed, Slab,
     StackAlloc, WithFallback, DEFAULT_CLASS_SIZES_8,
 };
 
 #[cfg(target_has_atomic = "ptr")]
 #[doc(inline)]
-pub use forge_layout::SharedBumpArena;
+pub use layout::SharedBumpArena;
 
 #[cfg(feature = "std")]
 #[doc(inline)]
-pub use forge_layout::{
+pub use layout::{
     BatchPolicy, ExtendableSlab, SlabOwner, SlabRemote, ADAPTIVE_COOLDOWN_TICKS, ADAPTIVE_LEVELS,
 };
 
 #[doc(inline)]
-pub use forge_hardening::{
-    AllocStats, CachePadded, CacheJitter, Canary, Faulty, PoisonOnFree, Quarantine, Statistics,
+pub use hardening::{
+    AllocStats, CacheJitter, CachePadded, Canary, Faulty, PoisonOnFree, Quarantine, Statistics,
     DEFAULT_POISON,
 };
 
 #[cfg(feature = "std")]
 #[doc(inline)]
-pub use forge_hardening::SplitMetadata;
+pub use hardening::SplitMetadata;
 
 #[cfg(feature = "std")]
 #[doc(inline)]
-pub use forge_hardening::{
+pub use hardening::{
     current_numa_node, default_huge_page_size, GuardPage, HugePageAligned, NodeSet, NumaLocal,
     NumaPolicy,
 };
 
 #[cfg(target_has_atomic = "ptr")]
 #[doc(inline)]
-pub use forge_hardening::{
+pub use hardening::{
     FnHandler, NullHandler, Watermark, WatermarkEvent, WatermarkHandler, WatermarkLevel,
     WatermarkThresholds,
 };
 
 #[cfg(all(target_has_atomic = "ptr", feature = "std"))]
 #[doc(inline)]
-pub use forge_hardening::LogHandler;
+pub use hardening::LogHandler;
 
 // ============================================================================
 // Convenience type aliases for recommended compositions

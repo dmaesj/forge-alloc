@@ -43,7 +43,10 @@ fn main() {
 
     // The arena lives on the stack of main.
     let arena = Arena::new(InlineBacked::<ARENA_SIZE>::new()).unwrap();
-    println!("arena: 64 KiB inline-backed, capacity {} bytes", arena.capacity());
+    println!(
+        "arena: 64 KiB inline-backed, capacity {} bytes",
+        arena.capacity()
+    );
 
     // Allocate a series of small buffers — typical CLI workload
     // (parsing a config file, building a string of output, etc.).

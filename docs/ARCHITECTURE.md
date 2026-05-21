@@ -4,7 +4,7 @@ High-level mental model for `forge-alloc` — the design source-of-truth.
 Companion to [`COMPOSITION_RECIPES.md`](COMPOSITION_RECIPES.md)
 (caller-facing examples).
 
-## Three layers, separable
+## Three layers
 
 ```
                   ┌─────────────────────────────┐
@@ -12,35 +12,41 @@ Companion to [`COMPOSITION_RECIPES.md`](COMPOSITION_RECIPES.md)
                   └──────┬──────────────────────┘
                          │
                          ↓
-   Layer 3:   hardening wrappers (Canary, PoisonOnFree, Quarantine,
-   forge-hardening    Statistics, Watermark, GuardPage, CacheJitter,
-                   HugePageAligned, NumaLocal, SplitMetadata) +
+   Layer 3    hardening wrappers — Canary, PoisonOnFree, Quarantine,
+   hardening/        Statistics, Watermark, GuardPage, CacheJitter,
+                   HugePageAligned, NumaLocal, SplitMetadata, and
                    Faulty (test-only fault injection)
                          │   wrap any Layer-2 (or each other)
                          ↓
-   Layer 2:   layout primitives (BumpArena, SharedBumpArena, Slab,
-   forge-layout       SizeClassed, StackAlloc, ExtendableSlab,
-                   GenerationalSlab, SlabOwner/SlabRemote, WithFallback)
+   Layer 2    layout primitives — BumpArena, SharedBumpArena, Slab,
+   layout/          SizeClassed, StackAlloc, ExtendableSlab,
+                   GenerationalSlab, SlabOwner/SlabRemote, WithFallback
                          │   organize memory from a Layer-1 backing
                          ↓
-   Layer 1:   backings (InlineBacked, MmapBacked, System)
-   forge-backing      "where do bytes come from"
+   Layer 1    backings — InlineBacked, MmapBacked, System
+   backing/         "where do bytes come from"
                          │
                          ↓
-   Layer 0:   traits (Allocator, Deallocator, OsBacked, FixedRange,
-   forge-core         FreelistProtection, ProtectFlags), NonZeroLayout,
-                   StdCompat<A>
+   Layer 0    traits — Allocator, Deallocator, OsBacked, FixedRange,
+   forge-           FreelistProtection, ProtectFlags — plus NonZeroLayout
+   alloc-core       and StdCompat<A>
 ```
 
-The crate boundaries match the layers. A user who only needs
-`BumpArena<InlineBacked<N>>` depends on `forge-core` + `forge-backing` +
-`forge-layout` and pays no compile-time cost for the hardening surface.
-The `forge-alloc` meta-crate re-exports everything and is the
-default entry point.
+Layers 1–3 are modules of the `forge-alloc` crate (`backing`, `layout`,
+`hardening`). Layer 0 is the standalone `forge-alloc-core` crate, which
+`forge-alloc` depends on and re-exports — so a single `forge-alloc`
+dependency gives you the whole surface.
+
+Splitting the trait contracts into their own crate makes that one
+boundary **compiler-enforced**: nothing in `forge-alloc` can leak into
+`forge-alloc-core`. The ordering *among* the three implementation
+modules (backing → layout → hardening) cannot be enforced by the
+compiler within a single crate, so a source-scan test
+(`crates/forge-alloc/tests/layering.rs`) guards it instead.
 
 ## Why three layers?
 
-The spec calls this "pay-for-what-you-use security hardening":
+This is the "pay-for-what-you-use security hardening" principle:
 
 - **Layer 1 backings** are the only place where memory provenance
   enters the system. A backing is responsible for the OS-level
@@ -203,7 +209,6 @@ The unsafe blocks themselves cluster around a few patterns:
   Sound because the wrapping `MmapBacked` / `NumaLocal` enforces the
   invariants in their constructors.
 
-MIRI runs on `forge-core` (full features) and the `no_std` subsets of
-the higher layers in CI. Kani proofs live at the per-crate level
-(currently `BumpArena` + `Slab`) and verify symbolic-input properties
-of the unsafe arithmetic.
+MIRI runs on `forge-alloc-core` (full features) and `forge-alloc` in CI.
+Kani proofs verify symbolic-input properties of the unsafe arithmetic on
+`BumpArena` + `Slab`.

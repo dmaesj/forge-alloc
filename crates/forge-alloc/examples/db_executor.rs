@@ -95,8 +95,7 @@ fn main() {
     println!("----------------------------------------------------------------");
 
     // Buffer pool (warm-tier, shared across queries).
-    let buffer_pool: BufferPool =
-        Slab::new(64, MmapBacked::new(1 << 22).unwrap()).unwrap();
+    let buffer_pool: BufferPool = Slab::new(64, MmapBacked::new(1 << 22).unwrap()).unwrap();
     let page_layout = NonZeroLayout::for_type::<Page>().unwrap();
     println!("buffer_pool: 64 pages × 8 KiB each = {} KiB", 64 * 8);
 
@@ -131,7 +130,9 @@ fn main() {
         println!("  arena: plan + scratch ({} bytes)", 2 * 2048);
 
         // Warm: borrow some pages from the buffer pool.
-        let pages: Vec<_> = (0..2).map(|_| buffer_pool.allocate(page_layout).unwrap()).collect();
+        let pages: Vec<_> = (0..2)
+            .map(|_| buffer_pool.allocate(page_layout).unwrap())
+            .collect();
         unsafe {
             for (j, p) in pages.iter().enumerate() {
                 let pg = p.cast::<Page>().as_ptr();

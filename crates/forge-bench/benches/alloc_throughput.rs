@@ -9,10 +9,18 @@
 //! - Query key encoding: bump arena, reset per query
 //! - Parser AST: bump arena, bulk-free per parse
 
-use forge_backing::{InlineBacked, MmapBacked, System};
-use forge_core::{Allocator, Deallocator, NonZeroLayout};
-use forge_layout::{BumpArena, Slab, WithFallback};
 use criterion::{black_box, criterion_group, criterion_main, BatchSize, Criterion, Throughput};
+use forge_alloc::{Allocator, Deallocator, NonZeroLayout};
+use forge_alloc::{BumpArena, Slab, WithFallback};
+use forge_alloc::{InlineBacked, MmapBacked, System};
+
+// Per-batch allocation count for the inline-backed bump benches. Kept
+// modest so the `InlineBacked<N>` const-generic array stays small: a
+// very large inline array routed through criterion's generic
+// `iter_batched` machinery crashes the rustc optimizer. 256 round-trips
+// is ample for a steady-state per-op measurement.
+const BURST: usize = 256;
+const INLINE_BYTES: usize = BURST * 64 + 4096;
 
 #[repr(C)]
 struct Bar {
@@ -25,20 +33,20 @@ struct Bar {
 }
 
 fn bench_bump_arena_inline(c: &mut Criterion) {
-    // Measure a *batch* of 1024 allocations from a fresh arena per iteration.
-    // Constructing the arena once outside `iter` lets it exhaust after a few
-    // thousand iterations and the bench would then measure only the
-    // `AllocError` return path (hot-path numbers must reflect the
-    // success path). `iter_batched` with `LargeInput` resets the arena per
-    // batch and amortizes the construction cost.
+    // Measure a *batch* of `BURST` allocations from a fresh arena per
+    // iteration. Constructing the arena once outside `iter` lets it
+    // exhaust and the bench would then measure only the `AllocError`
+    // return path (hot-path numbers must reflect the success path).
+    // `iter_batched` with `LargeInput` resets the arena per batch and
+    // amortizes the construction cost.
     let mut g = c.benchmark_group("bump_arena_inline");
-    g.throughput(Throughput::Elements(1024));
+    g.throughput(Throughput::Elements(BURST as u64));
     let layout = NonZeroLayout::from_size_align(64, 8).unwrap();
     g.bench_function("alloc_64", |b| {
         b.iter_batched(
-            || BumpArena::new(InlineBacked::<{ 1024 * 64 + 4096 }>::new()).unwrap(),
+            || BumpArena::new(InlineBacked::<INLINE_BYTES>::new()).unwrap(),
             |arena| {
-                for _ in 0..1024 {
+                for _ in 0..BURST {
                     let r = arena.allocate(black_box(layout)).unwrap();
                     black_box(r);
                 }
@@ -52,7 +60,7 @@ fn bench_bump_arena_inline(c: &mut Criterion) {
 fn bench_bump_arena_reset_cycle(c: &mut Criterion) {
     let mut g = c.benchmark_group("bump_arena_reset_cycle");
     g.throughput(Throughput::Elements(64));
-    let mut arena = BumpArena::new(InlineBacked::<65536>::new()).unwrap();
+    let mut arena = BumpArena::new(InlineBacked::<8192>::new()).unwrap();
     let layout = NonZeroLayout::from_size_align(64, 8).unwrap();
     g.bench_function("alloc64_then_reset", |b| {
         b.iter(|| {
@@ -85,20 +93,18 @@ fn bench_slab_typed(c: &mut Criterion) {
 }
 
 fn bench_slab_typed_no_free(c: &mut Criterion) {
-    // Constructing the slab once and never freeing exhausts it in 1<<14
-    // iterations; subsequent iterations measure only the AllocError path and
-    // make the reported throughput meaningless. Recreate the slab per
-    // batch and measure a 1024-alloc burst from empty.
+    // Constructing the slab once and never freeing exhausts it; subsequent
+    // iterations measure only the AllocError path and make the reported
+    // throughput meaningless. Recreate the slab per batch and measure a
+    // `BURST`-alloc burst from empty.
     let mut g = c.benchmark_group("slab_typed_no_free");
-    g.throughput(Throughput::Elements(1024));
+    g.throughput(Throughput::Elements(BURST as u64));
     let layout = NonZeroLayout::for_type::<Bar>().unwrap();
     g.bench_function("alloc_only", |b| {
         b.iter_batched(
-            || {
-                Slab::<Bar, MmapBacked>::new(1 << 14, MmapBacked::new(1 << 22).unwrap()).unwrap()
-            },
+            || Slab::<Bar, MmapBacked>::new(1 << 14, MmapBacked::new(1 << 22).unwrap()).unwrap(),
             |s| {
-                for _ in 0..1024 {
+                for _ in 0..BURST {
                     let p = s.allocate(black_box(layout)).unwrap();
                     black_box(p);
                 }
@@ -110,18 +116,18 @@ fn bench_slab_typed_no_free(c: &mut Criterion) {
 }
 
 fn bench_with_fallback(c: &mut Criterion) {
-    // Primary is InlineBacked<65536> over 64-byte allocs = 1024 successful
-    // iterations before the bump arena exhausts and we start routing to
-    // System. We want "primary_path" to reflect the bump fast-path only —
-    // construct a fresh WithFallback per batch.
+    // Primary is an inline bump arena sized for `BURST` 64-byte allocs, so
+    // every iteration in the batch hits the bump fast-path before the arena
+    // would exhaust and route to System. Construct a fresh WithFallback per
+    // batch so "primary_path" reflects the bump fast-path only.
     let mut g = c.benchmark_group("with_fallback");
-    g.throughput(Throughput::Elements(1024));
+    g.throughput(Throughput::Elements(BURST as u64));
     let layout = NonZeroLayout::from_size_align(64, 8).unwrap();
     g.bench_function("primary_path", |b| {
         b.iter_batched(
-            || WithFallback::new(InlineBacked::<{ 1024 * 64 + 4096 }>::new(), System),
+            || WithFallback::new(InlineBacked::<INLINE_BYTES>::new(), System),
             |wf| {
-                for _ in 0..1024 {
+                for _ in 0..BURST {
                     let r = wf.allocate(black_box(layout)).unwrap();
                     black_box(r);
                 }

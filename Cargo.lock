@@ -316,36 +316,17 @@ checksum = "d9c4f5dac5e15c24eb999c26181a6ca40b39fe946cbe4c263c7209467bc83af2"
 name = "forge-alloc"
 version = "0.1.0"
 dependencies = [
- "forge-backing",
- "forge-core",
- "forge-hardening",
- "forge-layout",
- "proptest",
-]
-
-[[package]]
-name = "forge-backing"
-version = "0.1.0"
-dependencies = [
  "allocator-api2",
- "forge-core",
+ "forge-alloc-core",
  "libc",
+ "loom",
+ "proptest",
+ "subtle",
  "windows-sys 0.59.0",
 ]
 
 [[package]]
-name = "forge-bench"
-version = "0.1.0"
-dependencies = [
- "codspeed-criterion-compat",
- "forge-backing",
- "forge-core",
- "forge-hardening",
- "forge-layout",
-]
-
-[[package]]
-name = "forge-core"
+name = "forge-alloc-core"
 version = "0.1.0"
 dependencies = [
  "allocator-api2",
@@ -355,24 +336,11 @@ dependencies = [
 ]
 
 [[package]]
-name = "forge-hardening"
+name = "forge-bench"
 version = "0.1.0"
 dependencies = [
- "forge-backing",
- "forge-core",
- "forge-layout",
- "libc",
- "subtle",
-]
-
-[[package]]
-name = "forge-layout"
-version = "0.1.0"
-dependencies = [
- "forge-backing",
- "forge-core",
- "loom",
- "proptest",
+ "codspeed-criterion-compat",
+ "forge-alloc",
 ]
 
 [[package]]

@@ -20,17 +20,23 @@ type Hardened<T> = Slab<T, GuardPage<SplitMetadata<MmapBacked>>>;
 The design is laid out in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md);
 a per-release summary lives in [`CHANGELOG.md`](CHANGELOG.md).
 
-## Workspace layout
+## Crates
 
 | crate | role |
 |---|---|
-| `forge-core` | trait contracts (`Allocator`, `Deallocator`, `OsBacked`, `FixedRange`, `FreelistProtection`, `AllocFaultPolicy`), `NonZeroLayout`, `StdCompat<A>` |
-| `forge-backing` | Layer 1 backings — `InlineBacked<N>`, `MmapBacked`, `System` |
-| `forge-layout` | Layer 2 layout — `BumpArena`, `SharedBumpArena`, `Slab`, `SizeClassed`, `StackAlloc`, `ExtendableSlab`, `GenerationalSlab`, `SlabOwner` / `SlabRemote`, `WithFallback` |
-| `forge-hardening` | Layer 3 hardening — `Canary`, `PoisonOnFree`, `Quarantine`, `Statistics`, `Watermark`, `GuardPage`, `CacheJitter`, `HugePageAligned`, `NumaLocal`, `SplitMetadata`; plus `Faulty` (test-only fault injection) |
-| `forge-alloc` | meta-crate; re-exports the union of the above. Most users depend on this; users who only need a subset depend directly on the relevant `forge-*` crate to minimise compile time and dependency footprint |
-| `forge-bench` | Criterion benchmarks (workspace-internal, `publish = false`) |
+| `forge-alloc` | The library — Layer 1 backings, Layer 2 layout primitives, and Layer 3 hardening wrappers, plus the trait re-exports. **This is the crate to depend on.** |
+| `forge-alloc-core` | The trait contracts (`Allocator`, `Deallocator`, `OsBacked`, `FixedRange`, `FreelistProtection`, `AllocFaultPolicy`), `NonZeroLayout`, and `StdCompat<A>`. Re-exported by `forge-alloc`; depend on it directly only to *implement* the traits without pulling in the implementations. |
+| `forge-bench` | Criterion / CodSpeed benchmarks (workspace-internal, `publish = false`) |
 | `forge-fuzz` | cargo-fuzz targets (workspace-excluded; nightly only) |
+
+Inside `forge-alloc` the three implementation layers are modules —
+**backing** (`InlineBacked`, `MmapBacked`, `System`), **layout**
+(`BumpArena`, `SharedBumpArena`, `Slab`, `SizeClassed`, `StackAlloc`,
+`ExtendableSlab`, `GenerationalSlab`, `SlabOwner`/`SlabRemote`,
+`WithFallback`), and **hardening** (`Canary`, `PoisonOnFree`,
+`Quarantine`, `Statistics`, `Watermark`, `GuardPage`, `CacheJitter`,
+`HugePageAligned`, `NumaLocal`, `SplitMetadata`, plus `Faulty` for
+test-only fault injection).
 
 ## Status
 

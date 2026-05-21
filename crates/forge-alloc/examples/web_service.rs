@@ -85,8 +85,7 @@ fn main() {
     println!("-----------------------------------------------");
 
     // Build the warm path: a connection pool with System fallback.
-    let conn_pool: ConnectionPool =
-        Slab::new(1024, MmapBacked::new(1 << 20).unwrap()).unwrap();
+    let conn_pool: ConnectionPool = Slab::new(1024, MmapBacked::new(1 << 20).unwrap()).unwrap();
     let conns: ConnAllocator = WithFallback::new(conn_pool, System);
 
     // Open three connections (typical client churn).

@@ -11,9 +11,7 @@ license     = "MIT OR Apache-2.0"
 cargo-fuzz = true
 
 [dependencies]
-forge-core    = { path = "../forge-core" }
-forge-backing = { path = "../forge-backing" }
-forge-layout  = { path = "../forge-layout" }
+forge-alloc   = { path = "../forge-alloc" }
 libfuzzer-sys = "0.4"
 arbitrary  = { version = "1", features = ["derive"] }
 
