@@ -255,15 +255,11 @@ impl SipHashMAC {
         // to keep the dependency set lean; HashMap's RandomState gives us
         // 16 bytes of OS entropy through a stable, audited path.
         use std::collections::hash_map::RandomState;
-        use std::hash::{BuildHasher, Hash, Hasher};
-        let mut h1 = RandomState::new().build_hasher();
-        let mut h2 = RandomState::new().build_hasher();
-        // Mix a couple of unique values into each hasher so the two halves of
-        // the key come from independent state.
-        0u64.hash(&mut h1);
-        1u64.hash(&mut h2);
-        let a = h1.finish().to_le_bytes();
-        let b = h2.finish().to_le_bytes();
+        use std::hash::BuildHasher;
+        // Mix a unique value into each independently-seeded hasher so the two
+        // halves of the key come from independent random state.
+        let a = RandomState::new().hash_one(0u64).to_le_bytes();
+        let b = RandomState::new().hash_one(1u64).to_le_bytes();
         let mut key = [0u8; 16];
         key[..8].copy_from_slice(&a);
         key[8..].copy_from_slice(&b);

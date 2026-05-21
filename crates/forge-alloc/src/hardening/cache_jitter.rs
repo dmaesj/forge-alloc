@@ -178,10 +178,9 @@ impl<I> CacheJitter<I> {
     #[cfg(feature = "std")]
     pub fn new(inner: I, cache_line_size: usize, associativity: usize) -> Option<Self> {
         use std::collections::hash_map::RandomState;
-        use std::hash::{BuildHasher, Hash, Hasher};
-        let mut h = RandomState::new().build_hasher();
-        0u64.hash(&mut h);
-        Self::with_params(inner, cache_line_size, associativity, h.finish())
+        use std::hash::BuildHasher;
+        let seed = RandomState::new().hash_one(0u64);
+        Self::with_params(inner, cache_line_size, associativity, seed)
     }
 
     /// Borrow the inner allocator.

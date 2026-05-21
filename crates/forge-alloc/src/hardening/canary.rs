@@ -88,10 +88,8 @@ impl<I> Canary<I> {
         // Reuse the same entropy strategy as SipHashMAC: a HashMap
         // RandomState run once gives us 64 bits of OS-derived randomness.
         use std::collections::hash_map::RandomState;
-        use std::hash::{BuildHasher, Hash, Hasher};
-        let mut h = RandomState::new().build_hasher();
-        0u64.hash(&mut h);
-        Self::new_with_seed(inner, h.finish())
+        use std::hash::BuildHasher;
+        Self::new_with_seed(inner, RandomState::new().hash_one(0u64))
     }
 
     /// Borrow the inner allocator.
