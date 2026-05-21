@@ -17,8 +17,8 @@ type Scratch = Statistics<PoisonOnFree<BumpArena<MmapBacked>>>;
 type Hardened<T> = Slab<T, GuardPage<SplitMetadata<MmapBacked>>>;
 ```
 
-The design is laid out in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md);
-a per-release summary lives in [`CHANGELOG.md`](CHANGELOG.md).
+The design is laid out in [`docs/ARCHITECTURE.md`](https://github.com/dmaesj/forge-alloc/blob/main/docs/ARCHITECTURE.md);
+a per-release summary lives in [`CHANGELOG.md`](https://github.com/dmaesj/forge-alloc/blob/main/CHANGELOG.md).
 
 ## Crates
 
@@ -54,22 +54,22 @@ to develop against.
 
 ## Documentation
 
-- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — the three-layer
+- [`docs/ARCHITECTURE.md`](https://github.com/dmaesj/forge-alloc/blob/main/docs/ARCHITECTURE.md) — the three-layer
   mental model. Start here.
-- [`docs/APPLICATION_RECIPES.md`](docs/APPLICATION_RECIPES.md) —
+- [`docs/APPLICATION_RECIPES.md`](https://github.com/dmaesj/forge-alloc/blob/main/docs/APPLICATION_RECIPES.md) —
   application-architecture walkthroughs (CLI batch, embedded firmware,
   web service, game engine, auth service, database executor), each
   backed by a runnable example in
-  [`crates/forge-alloc/examples/`](crates/forge-alloc/examples/).
-- [`docs/COMPOSITION_RECIPES.md`](docs/COMPOSITION_RECIPES.md) — the
+  [`crates/forge-alloc/examples/`](https://github.com/dmaesj/forge-alloc/tree/main/crates/forge-alloc/examples).
+- [`docs/COMPOSITION_RECIPES.md`](https://github.com/dmaesj/forge-alloc/blob/main/docs/COMPOSITION_RECIPES.md) — the
   type-level cookbook: how to wire one primitive.
-- [`docs/COMPATIBILITY_MATRIX.md`](docs/COMPATIBILITY_MATRIX.md) — the
+- [`docs/COMPATIBILITY_MATRIX.md`](https://github.com/dmaesj/forge-alloc/blob/main/docs/COMPATIBILITY_MATRIX.md) — the
   catalogue of combinations that don't work or shouldn't be tried
   (compile-time rejections, construction errors, footguns, and
   v2.0-deferred constraints).
-- [`docs/PERFORMANCE_TRADEOFFS.md`](docs/PERFORMANCE_TRADEOFFS.md) — the
+- [`docs/PERFORMANCE_TRADEOFFS.md`](https://github.com/dmaesj/forge-alloc/blob/main/docs/PERFORMANCE_TRADEOFFS.md) — the
   pay-for-what-you-use cost curve across the hardening tiers.
-- [`CONTRIBUTING.md`](CONTRIBUTING.md) — how to add a primitive and
+- [`CONTRIBUTING.md`](https://github.com/dmaesj/forge-alloc/blob/main/CONTRIBUTING.md) — how to add a primitive and
   submit a change.
 
 ## MSRV
@@ -80,8 +80,8 @@ Rust 1.84 — `core::ptr::without_provenance_mut` is stable since 1.84.
 
 Dual-licensed at your option under either:
 
-- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE))
-- MIT License ([LICENSE-MIT](LICENSE-MIT))
+- Apache License, Version 2.0 ([LICENSE-APACHE](https://github.com/dmaesj/forge-alloc/blob/main/LICENSE-APACHE))
+- MIT License ([LICENSE-MIT](https://github.com/dmaesj/forge-alloc/blob/main/LICENSE-MIT))
 
 Unless you explicitly state otherwise, any contribution intentionally
 submitted for inclusion in the work by you, as defined in the
