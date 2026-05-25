@@ -443,7 +443,7 @@ mod kani_proofs {
 
     /// `insert` then `get` returns the inserted value via the issued handle.
     #[kani::proof]
-    #[kani::unwind(3)]
+    #[kani::unwind(5)]
     fn insert_then_get_round_trips() {
         let mut s: GenerationalSlab<u64, InlineBacked<512>> =
             GenerationalSlab::new(4, InlineBacked::<512>::new()).unwrap();
@@ -457,7 +457,7 @@ mod kani_proofs {
     /// `None`) — the generation counter on the slot mismatches the
     /// handle's frozen generation.
     #[kani::proof]
-    #[kani::unwind(3)]
+    #[kani::unwind(5)]
     fn remove_invalidates_old_handle() {
         let mut s: GenerationalSlab<u64, InlineBacked<512>> =
             GenerationalSlab::new(4, InlineBacked::<512>::new()).unwrap();
@@ -471,7 +471,7 @@ mod kani_proofs {
     /// Reusing a slot via subsequent insert hands out a NEW handle whose
     /// generation differs from any prior handle to the same slot.
     #[kani::proof]
-    #[kani::unwind(3)]
+    #[kani::unwind(5)]
     fn reused_slot_gets_new_handle() {
         let mut s: GenerationalSlab<u64, InlineBacked<512>> =
             GenerationalSlab::new(4, InlineBacked::<512>::new()).unwrap();
