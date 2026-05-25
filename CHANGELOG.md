@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [forge-alloc-core 0.1.2] - 2026-05-25 (docs-only)
+
+Patch release of `forge-alloc-core` only. `forge-alloc` stays at 0.2.1
+and continues to accept `forge-alloc-core ^0.1.1`, so this version is
+picked up automatically by `cargo update`.
+
+### Documentation
+- Added a "Use in a layout pin" example to the `CACHE_LINE` rustdoc
+  showing how to combine it with `core::mem::offset_of!` to build a
+  compile-time assertion that two contended fields in a downstream
+  struct never share a cache line. Mirrors the pattern forge-alloc
+  uses internally on `AllocStats`, `Watermark`, `SharedBumpArena`,
+  and `SlabInner`. The example is a doctest so it runs in CI as a
+  regression guard against the idiom breaking.
+
 ## [0.2.1] - 2026-05-25
 
 ### Changed (internal refactor; non-breaking)
@@ -279,7 +294,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `Handle<T, G>`, `SlabOwner<T, B>` / `SlabRemote<T, B>` /
   `RemoteFreeQueue`.
 
-[Unreleased]: https://github.com/dmaesj/forge-alloc/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/dmaesj/forge-alloc/compare/forge-alloc-core-v0.1.2...HEAD
+[forge-alloc-core 0.1.2]: https://github.com/dmaesj/forge-alloc/compare/v0.2.1...forge-alloc-core-v0.1.2
 [0.2.1]: https://github.com/dmaesj/forge-alloc/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/dmaesj/forge-alloc/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/dmaesj/forge-alloc/releases/tag/v0.1.0
