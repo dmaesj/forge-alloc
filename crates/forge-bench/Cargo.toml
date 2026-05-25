@@ -18,7 +18,7 @@ doctest = false
 siphasher = ["forge-alloc/siphasher"]
 
 [dependencies]
-forge-alloc = { version = "0.2.0", path = "../forge-alloc" }
+forge-alloc = { version = "0.2.1", path = "../forge-alloc" }
 
 [dev-dependencies]
 # `codspeed-criterion-compat` is a drop-in for `criterion`: the `package =`

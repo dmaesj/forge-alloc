@@ -49,14 +49,10 @@
 extern crate alloc;
 
 mod backing;
-mod cache_padded;
 mod hardening;
 mod layout;
 
 pub use forge_alloc_core::*;
-
-#[doc(inline)]
-pub use cache_padded::{CachePadded, CACHE_LINE};
 
 #[doc(inline)]
 pub use backing::{InlineBacked, MAX_ALIGN};

@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-05-25
+
+### Changed (internal refactor; non-breaking)
+- `CachePadded` and `CACHE_LINE` moved from `forge-alloc` to
+  `forge-alloc-core` (bumped 0.1.0 → 0.1.1). Both remain re-exported
+  at `forge_alloc::CachePadded` and `forge_alloc::CACHE_LINE` via the
+  existing `pub use forge_alloc_core::*`, so the public path that
+  consumers use is unchanged. The new canonical path is
+  `forge_alloc_core::CachePadded`, which lets downstream crates that
+  depend only on `forge-alloc-core` use the primitive without pulling
+  in the full `forge-alloc` surface.
+
 ## [0.2.0] - 2026-05-25
 
 ### Changed (BREAKING - `forge-alloc` only; `forge-alloc-core` unchanged)
@@ -262,6 +274,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `Handle<T, G>`, `SlabOwner<T, B>` / `SlabRemote<T, B>` /
   `RemoteFreeQueue`.
 
-[Unreleased]: https://github.com/dmaesj/forge-alloc/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/dmaesj/forge-alloc/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/dmaesj/forge-alloc/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/dmaesj/forge-alloc/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/dmaesj/forge-alloc/releases/tag/v0.1.0

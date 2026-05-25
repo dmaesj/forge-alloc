@@ -12,6 +12,8 @@
 //! - [`FreelistProtection`] (+ [`NoProtection`], optional `SipHashMAC` / `PacMAC`)
 //! - [`AllocFaultPolicy`] — the OOM fault-injection seam for the
 //!   `hardening` `Faulty` wrapper (+ built-in policies)
+//! - [`CachePadded`] — target-aware cache-line alignment wrapper for
+//!   contended atomics
 //!
 //! Higher layers (the `backing`, `layout`, `hardening` modules) consume these
 //! traits to produce primitive types; the `forge-alloc` crate re-exports
@@ -23,7 +25,10 @@
 
 extern crate alloc;
 
+pub mod cache_padded;
 pub mod traits;
+
+pub use cache_padded::{CachePadded, CACHE_LINE};
 
 pub use traits::{
     AllocError, AllocFaultPolicy, Allocator, AlwaysFail, Deallocator, FailAfter, FailEveryNth,

@@ -9,7 +9,7 @@ use core::sync::atomic::{AtomicUsize, Ordering};
 use forge_alloc_core::{AllocError, Allocator, Deallocator, FixedRange, NonZeroLayout};
 
 #[cfg(target_has_atomic = "ptr")]
-use crate::cache_padded::{CachePadded, CACHE_LINE};
+use forge_alloc_core::{CachePadded, CACHE_LINE};
 
 /// Severity bucket emitted to a [`WatermarkHandler`].
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]

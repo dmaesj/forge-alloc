@@ -10,9 +10,9 @@
 use core::ptr::NonNull;
 use core::sync::atomic::{AtomicUsize, Ordering};
 
-use forge_alloc_core::{AllocError, Allocator, Deallocator, FixedRange, NonZeroLayout};
-
-use crate::cache_padded::{CachePadded, CACHE_LINE};
+use forge_alloc_core::{
+    AllocError, Allocator, CachePadded, Deallocator, FixedRange, NonZeroLayout, CACHE_LINE,
+};
 
 /// Snapshot of allocation activity. All counters are atomic; reading is
 /// `Ordering::Relaxed` because counter values are advisory (operators read

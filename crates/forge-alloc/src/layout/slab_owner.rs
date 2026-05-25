@@ -23,9 +23,10 @@ use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
-use forge_alloc_core::{AllocError, Allocator, Deallocator, FixedRange, NonZeroLayout};
+use forge_alloc_core::{
+    AllocError, Allocator, CachePadded, Deallocator, FixedRange, NonZeroLayout, CACHE_LINE,
+};
 
-use crate::cache_padded::{CachePadded, CACHE_LINE};
 use crate::layout::Slab;
 
 /// How aggressively the owner drains the remote-free queue.

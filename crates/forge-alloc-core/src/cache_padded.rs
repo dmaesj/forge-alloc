@@ -37,7 +37,7 @@
 /// # Example
 ///
 /// ```
-/// use forge_alloc::CachePadded;
+/// use forge_alloc_core::CachePadded;
 /// use core::sync::atomic::{AtomicUsize, Ordering};
 ///
 /// struct Stats {
