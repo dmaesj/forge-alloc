@@ -41,3 +41,7 @@ harness = false
 [[bench]]
 name    = "composition_tradeoffs"
 harness = false
+
+[[bench]]
+name    = "contention"
+harness = false
