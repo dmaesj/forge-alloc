@@ -21,6 +21,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.2.0] - 2026-05-25
 
+> **Note:** 0.2.0 was tagged in git but never published to crates.io.
+> [0.2.1](#021---2026-05-25) is the first release containing these
+> changes on the registry; the entry below is preserved for git-history
+> readers.
+
 ### Changed (BREAKING - `forge-alloc` only; `forge-alloc-core` unchanged)
 - `CachePadded<T>` is now target-aware. On `x86_64`, `aarch64`, and
   `powerpc64` its alignment grew from 64 bytes to **128 bytes** (Apple

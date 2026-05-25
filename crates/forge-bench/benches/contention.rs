@@ -37,11 +37,7 @@ use forge_alloc::{Allocator, InlineBacked, NonZeroLayout, SharedBumpArena, Stati
 const MICRO_OPS_PER_THREAD: usize = 200_000;
 
 /// Same workload definition for both `contended` and `padded` variants.
-fn run_pair<T: Send + Sync + 'static>(
-    data: Arc<T>,
-    f0: fn(&T),
-    f1: fn(&T),
-) {
+fn run_pair<T: Send + Sync + 'static>(data: Arc<T>, f0: fn(&T), f1: fn(&T)) {
     let d0 = Arc::clone(&data);
     let d1 = Arc::clone(&data);
     let h0 = thread::spawn(move || f0(&d0));

@@ -122,6 +122,16 @@ impl<T> core::ops::DerefMut for CachePadded<T> {
 /// The cache-line alignment used by [`CachePadded`] on this target. Surfaced
 /// so dependent crates and `const _: () = assert!(...)` layout pins can
 /// reference the same value the wrapper itself uses.
+///
+/// Per-target values:
+///
+/// - **`x86_64`, `aarch64`, `powerpc64`**: 128 bytes (covers Apple
+///   Silicon's 128-byte coherency and x86_64's adjacent-line prefetch
+///   pair).
+/// - **`arm`, `mips`, `mips64`, `sparc`, `hexagon`**: 32 bytes.
+/// - **`m68k`**: 16 bytes.
+/// - **`s390x`**: 256 bytes.
+/// - Anything else: 64 bytes (historical x86 default).
 #[cfg(any(
     target_arch = "x86_64",
     target_arch = "aarch64",
@@ -129,6 +139,8 @@ impl<T> core::ops::DerefMut for CachePadded<T> {
 ))]
 pub const CACHE_LINE: usize = 128;
 
+/// See the primary [`CACHE_LINE`] doc for the per-target table; this
+/// branch covers small ARM / MIPS / SPARC / Hexagon at 32 bytes.
 #[cfg(any(
     target_arch = "arm",
     target_arch = "mips",
@@ -138,12 +150,19 @@ pub const CACHE_LINE: usize = 128;
 ))]
 pub const CACHE_LINE: usize = 32;
 
+/// See the primary [`CACHE_LINE`] doc for the per-target table; this
+/// branch covers m68k at 16 bytes.
 #[cfg(target_arch = "m68k")]
 pub const CACHE_LINE: usize = 16;
 
+/// See the primary [`CACHE_LINE`] doc for the per-target table; this
+/// branch covers s390x at 256 bytes.
 #[cfg(target_arch = "s390x")]
 pub const CACHE_LINE: usize = 256;
 
+/// See the primary [`CACHE_LINE`] doc for the per-target table; this
+/// fallback branch covers any architecture not explicitly listed and
+/// defaults to 64 bytes (historical x86 L1 line size).
 #[cfg(not(any(
     target_arch = "x86_64",
     target_arch = "aarch64",
@@ -173,7 +192,10 @@ mod tests {
 
     #[test]
     fn alignment_matches_target_constant() {
-        assert_eq!(core::mem::align_of::<CachePadded<AtomicUsize>>(), CACHE_LINE);
+        assert_eq!(
+            core::mem::align_of::<CachePadded<AtomicUsize>>(),
+            CACHE_LINE
+        );
     }
 
     #[test]

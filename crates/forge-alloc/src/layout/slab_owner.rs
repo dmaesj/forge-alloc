@@ -136,9 +136,15 @@ struct SlabInner<T, B: Allocator + forge_alloc_core::FixedRange> {
     /// `allocate` / `deallocate`, the queue cannot grow unboundedly past
     /// the threshold — the next tick samples a fresh value and drains.
     ///
-    /// Placed adjacent to `remote_queue` in the struct so the mirror write
-    /// tends to share a cache line with the mutex word the remote already
-    /// dirtied (layout-dependent; no explicit `CachePadded` wrapper here).
+    /// Not wrapped in `CachePadded`. With the preceding
+    /// `CachePadded<Mutex<...>>` field rounding up to a fresh cache-line
+    /// boundary, `remote_queue_len` already starts on a different cache
+    /// line from the mutex word — it's not sharing a line whether we pad
+    /// it or not. Adding a second `CachePadded` here would just bloat the
+    /// struct by another cache line for no perf benefit; the field is
+    /// already isolated from the mutex's cache traffic. (An earlier
+    /// version of this comment claimed the field shared a line with the
+    /// mutex on purpose — that was never actually the case post-padding.)
     remote_queue_len: AtomicUsize,
     /// Set by [`SlabOwner::drop`] under the `remote_queue` mutex.
     ///
