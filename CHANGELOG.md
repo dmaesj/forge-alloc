@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-05-25
+
+### Changed (BREAKING - `forge-alloc` only; `forge-alloc-core` unchanged)
+- `CachePadded<T>` is now target-aware. On `x86_64`, `aarch64`, and
+  `powerpc64` its alignment grew from 64 bytes to **128 bytes** (Apple
+  Silicon uses 128-byte cache coherency, and on x86_64 the adjacent-line
+  prefetcher pulls cache lines in pairs, so a 64-byte pad still allows
+  false sharing across the prefetched neighbor). Per-arch values: 128 on
+  x86_64/aarch64/powerpc64, 32 on arm/mips/mips64/sparc/hexagon, 16 on
+  m68k, 256 on s390x, 64 fallback. This is a layout-breaking change for
+  any consumer that asserts the size of `CachePadded<T>` directly; the
+  public path `forge_alloc::CachePadded` is unchanged.
+- `CachePadded` moved from `forge_alloc::hardening` (Layer 3) to the
+  crate root so it can be used by Layer 2 (`layout/`) without violating
+  the bottom-up layer DAG. The public path `forge_alloc::CachePadded`
+  still works; the secondary path `forge_alloc::hardening::CachePadded`
+  no longer resolves.
+
+### Added
+- `forge_alloc::CACHE_LINE`: target-specific cache-line size constant
+  surfaced for downstream layout pins.
+- `Watermark::allocated` and `Watermark::fired` are now wrapped in
+  `CachePadded` so the rising-edge `fetch_or` on `fired` does not
+  invalidate the `allocated` counter's line on every concurrent
+  allocate.
+- `SharedBumpArena::cursor` is now wrapped in `CachePadded` so the
+  contended CAS on the cursor does not invalidate the read-only
+  `backing` and `capacity` fields on every retry.
+- Compile-time `LAYOUT_PIN` assertions on `AllocStats`, `SlabInner`,
+  `Watermark`, and `SharedBumpArena` lock in the cache-line separation
+  invariants. A future refactor that reshuffles fields back onto the
+  same line fails the build with a clear error pointing at the
+  affected struct.
+
 ## [0.1.0] - 2026-05-21
 
 ### Changed (crate consolidation)
@@ -228,5 +262,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `Handle<T, G>`, `SlabOwner<T, B>` / `SlabRemote<T, B>` /
   `RemoteFreeQueue`.
 
-[Unreleased]: https://github.com/dmaesj/forge-alloc/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/dmaesj/forge-alloc/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/dmaesj/forge-alloc/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/dmaesj/forge-alloc/releases/tag/v0.1.0

@@ -15,6 +15,8 @@ use core::sync::atomic::{AtomicUsize, Ordering};
 
 use forge_alloc_core::{AllocError, Allocator, Deallocator, FixedRange, NonZeroLayout};
 
+use crate::cache_padded::{CachePadded, CACHE_LINE};
+
 /// Atomic-cursor bump arena.
 ///
 /// Sound under multi-thread `&self` allocation: the cursor uses a
@@ -34,7 +36,28 @@ pub struct SharedBumpArena<B: FixedRange> {
     // path cost is one extra indirect load.
     backing: B,
     capacity: usize,
-    cursor: AtomicUsize,
+    /// Atomic bump cursor. CAS'd by every concurrent allocator; kept on
+    /// its own cache line so contended writers don't invalidate the
+    /// read-only `backing` / `capacity` fields above (which the alloc
+    /// hot path reads on every retry). See [`CachePadded`].
+    cursor: CachePadded<AtomicUsize>,
+}
+
+impl<B: FixedRange> SharedBumpArena<B> {
+    /// Layout-pin: the cursor must occupy its own cache line. The
+    /// adjacent `backing` and `capacity` fields are read on every
+    /// allocate; without padding, every CAS on the cursor would
+    /// invalidate the line containing them, costing each concurrent
+    /// allocator a refill on every retry.
+    const LAYOUT_PIN: () = {
+        use core::mem::offset_of;
+        let cap_off = offset_of!(SharedBumpArena<B>, capacity);
+        let cur_off = offset_of!(SharedBumpArena<B>, cursor);
+        assert!(
+            cap_off / CACHE_LINE != cur_off / CACHE_LINE,
+            "SharedBumpArena layout regression: `cursor` shares a line with `capacity`",
+        );
+    };
 }
 
 impl<B: FixedRange> SharedBumpArena<B> {
@@ -42,6 +65,8 @@ impl<B: FixedRange> SharedBumpArena<B> {
     ///
     /// Errors if the backing reports a zero-byte range.
     pub fn new(backing: B) -> Result<Self, AllocError> {
+        // Force evaluation of the layout-pin const for this `B`.
+        let _: () = Self::LAYOUT_PIN;
         let capacity = backing.size();
         if capacity == 0 {
             return Err(AllocError);
@@ -49,7 +74,7 @@ impl<B: FixedRange> SharedBumpArena<B> {
         Ok(Self {
             backing,
             capacity,
-            cursor: AtomicUsize::new(0),
+            cursor: CachePadded::new(AtomicUsize::new(0)),
         })
     }
 

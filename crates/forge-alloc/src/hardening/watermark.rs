@@ -8,6 +8,9 @@ use core::sync::atomic::{AtomicUsize, Ordering};
 
 use forge_alloc_core::{AllocError, Allocator, Deallocator, FixedRange, NonZeroLayout};
 
+#[cfg(target_has_atomic = "ptr")]
+use crate::cache_padded::{CachePadded, CACHE_LINE};
+
 /// Severity bucket emitted to a [`WatermarkHandler`].
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum WatermarkLevel {
@@ -182,16 +185,41 @@ pub struct Watermark<I, H> {
     /// then never fires below saturation, which matches "no thresholds
     /// configured" semantics.
     warn_threshold_bytes: usize,
-    allocated: AtomicUsize,
+    /// Live bytes counter. Written on every allocate and deallocate from
+    /// any thread when `Watermark` wraps a `Sync` inner (`SharedBumpArena`,
+    /// `SlabOwner`); kept on its own cache line so concurrent writers
+    /// don't ping-pong against the read-only header fields above or the
+    /// `fired` bitmap below. See [`CachePadded`].
+    allocated: CachePadded<AtomicUsize>,
     /// Bit 0 = warn fired; bit 1 = critical fired. Set on rising edge to
-    /// prevent re-firing on every allocate.
-    fired: AtomicUsize,
+    /// prevent re-firing on every allocate. On its own cache line so the
+    /// rising-edge `fetch_or` in `check_and_fire` does not invalidate the
+    /// `allocated` counter's line on every threshold crossing.
+    fired: CachePadded<AtomicUsize>,
 }
 
 #[cfg(target_has_atomic = "ptr")]
 const FIRED_WARN: usize = 1;
 #[cfg(target_has_atomic = "ptr")]
 const FIRED_CRITICAL: usize = 2;
+
+#[cfg(target_has_atomic = "ptr")]
+impl<I, H> Watermark<I, H> {
+    /// Layout-pin: `allocated` (hammered every allocate/dealloc) and `fired`
+    /// (set on threshold crossings) must occupy different cache lines so
+    /// the rising-edge `fetch_or` on `fired` does not invalidate the
+    /// `allocated` line on every concurrent allocate. Forced to evaluate
+    /// by reference in [`with_thresholds`](Self::with_thresholds).
+    const LAYOUT_PIN: () = {
+        use core::mem::offset_of;
+        let a = offset_of!(Watermark<I, H>, allocated);
+        let f = offset_of!(Watermark<I, H>, fired);
+        assert!(
+            a / CACHE_LINE != f / CACHE_LINE,
+            "Watermark layout regression: `allocated` and `fired` share a cache line",
+        );
+    };
+}
 
 #[cfg(target_has_atomic = "ptr")]
 impl<I: Allocator, H: WatermarkHandler> Watermark<I, H> {
@@ -202,6 +230,8 @@ impl<I: Allocator, H: WatermarkHandler> Watermark<I, H> {
 
     /// Wrap with explicit thresholds.
     pub fn with_thresholds(inner: I, handler: H, thresholds: WatermarkThresholds) -> Self {
+        // Force evaluation of the layout-pin const for this (I, H).
+        let _: () = Self::LAYOUT_PIN;
         // Snapshot capacity at construction. Watermark re-queries via the
         // capacity_bytes() method below so growing inners (e.g.
         // ExtendableSlab) report the live value to handlers.
@@ -235,8 +265,8 @@ impl<I: Allocator, H: WatermarkHandler> Watermark<I, H> {
             thresholds,
             capacity_bytes,
             warn_threshold_bytes,
-            allocated: AtomicUsize::new(0),
-            fired: AtomicUsize::new(0),
+            allocated: CachePadded::new(AtomicUsize::new(0)),
+            fired: CachePadded::new(AtomicUsize::new(0)),
         }
     }
 

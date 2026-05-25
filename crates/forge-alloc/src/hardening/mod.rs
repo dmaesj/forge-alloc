@@ -61,7 +61,7 @@ pub use canary::Canary;
 pub use faulty::Faulty;
 pub use poison::{PoisonOnFree, DEFAULT_POISON};
 pub use quarantine::Quarantine;
-pub use statistics::{AllocStats, CachePadded, Statistics};
+pub use statistics::{AllocStats, Statistics};
 
 #[cfg(feature = "std")]
 pub use guard_page::GuardPage;

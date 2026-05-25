@@ -25,6 +25,7 @@ use std::sync::{Arc, Mutex};
 
 use forge_alloc_core::{AllocError, Allocator, Deallocator, FixedRange, NonZeroLayout};
 
+use crate::cache_padded::{CachePadded, CACHE_LINE};
 use crate::layout::Slab;
 
 /// How aggressively the owner drains the remote-free queue.
@@ -97,32 +98,6 @@ impl AdaptiveState {
     }
 }
 
-/// Cache-line-aligned wrapper. Prevents false sharing between hot
-/// owner-only fields and the cross-thread `remote_queue` mutex.
-///
-/// `#[repr(C, align(64))]` matches a typical x86_64 / AArch64 L1
-/// cache-line size; rounding the struct size to a multiple of 64 ensures
-/// the next field also begins on a fresh line. (Some Apple Silicon parts
-/// use 128-byte coherency granularity, but 64-aligned is the broadly
-/// portable choice without forcing 2× padding everywhere.)
-#[repr(C, align(64))]
-struct CachePadded<T>(T);
-
-impl<T> CachePadded<T> {
-    #[inline]
-    const fn new(v: T) -> Self {
-        Self(v)
-    }
-}
-
-impl<T> core::ops::Deref for CachePadded<T> {
-    type Target = T;
-    #[inline]
-    fn deref(&self) -> &T {
-        &self.0
-    }
-}
-
 /// Shared state between [`SlabOwner`] and any number of [`SlabRemote`] handles.
 ///
 /// Layout note: `remote_queue` is wrapped in `CachePadded` so the
@@ -173,6 +148,26 @@ struct SlabInner<T, B: Allocator + forge_alloc_core::FixedRange> {
     /// on `SlabOwner` because `SlabRemote` clones outlive the owner;
     /// they read it through their shared `Arc<SlabInner>`.
     closed: AtomicBool,
+}
+
+impl<T, B: Allocator + forge_alloc_core::FixedRange> SlabInner<T, B> {
+    /// Layout-pin: `slab` (owner-only, hot) and `remote_queue` (cross-thread
+    /// mutex word, hammered by remotes) must live on different cache lines.
+    /// Without this, every remote `push_back` would invalidate the owner's
+    /// L1-cached `slab` field and cost the owner a cache miss on its next
+    /// allocate. The `CachePadded` wrapper on `remote_queue` enforces it;
+    /// this const fires a compile error if a future refactor unwraps or
+    /// reorders the fields. Forced to evaluate by reference in
+    /// [`SlabOwner::with_batch_policy`].
+    const LAYOUT_PIN: () = {
+        use core::mem::offset_of;
+        let slab_off = offset_of!(SlabInner<T, B>, slab);
+        let queue_off = offset_of!(SlabInner<T, B>, remote_queue);
+        assert!(
+            slab_off / CACHE_LINE != queue_off / CACHE_LINE,
+            "SlabInner layout regression: `slab` and `remote_queue` share a cache line",
+        );
+    };
 }
 
 /// One entry in the remote-free queue: the (ptr, layout) pair to deallocate.
@@ -264,6 +259,11 @@ impl<T, B: Allocator + forge_alloc_core::FixedRange> SlabOwner<T, B> {
         batch_policy: BatchPolicy,
         queue_capacity: usize,
     ) -> Result<Self, AllocError> {
+        // Force evaluation of the layout-pin const for this instantiation
+        // of (T, B). Compiles away to nothing; fails the build if a future
+        // refactor reshuffles SlabInner so that `slab` and `remote_queue`
+        // share a cache line, restoring the false-sharing problem.
+        let _: () = SlabInner::<T, B>::LAYOUT_PIN;
         let slab = Slab::new(capacity, backing)?;
         let inner = Arc::new(SlabInner {
             slab: core::cell::UnsafeCell::new(slab),

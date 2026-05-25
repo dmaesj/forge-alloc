@@ -12,32 +12,7 @@ use core::sync::atomic::{AtomicUsize, Ordering};
 
 use forge_alloc_core::{AllocError, Allocator, Deallocator, FixedRange, NonZeroLayout};
 
-/// Cache-line aligned wrapper. Prevents false sharing between counters
-/// hammered from different code paths (alloc vs dealloc vs failure) when
-/// `Statistics` wraps a multi-thread allocator like `SharedBumpArena`.
-///
-/// 64-byte alignment matches a typical x86_64 / AArch64 L1 line; the
-/// `#[repr(C, align(64))]` rounds the total struct size up so the next
-/// field also begins on a fresh line.
-#[repr(C, align(64))]
-#[derive(Debug, Default)]
-pub struct CachePadded<T>(T);
-
-impl<T> CachePadded<T> {
-    /// Wrap a value with cache-line alignment padding.
-    #[inline]
-    pub const fn new(v: T) -> Self {
-        Self(v)
-    }
-}
-
-impl<T> core::ops::Deref for CachePadded<T> {
-    type Target = T;
-    #[inline]
-    fn deref(&self) -> &T {
-        &self.0
-    }
-}
+use crate::cache_padded::{CachePadded, CACHE_LINE};
 
 /// Snapshot of allocation activity. All counters are atomic; reading is
 /// `Ordering::Relaxed` because counter values are advisory (operators read
@@ -148,6 +123,36 @@ impl Default for AllocStats {
         Self::new()
     }
 }
+
+/// Layout-pin static assertions: every contended counter must occupy its
+/// own cache line. If a future refactor reorders or unwraps a field, the
+/// build fails here rather than silently regressing throughput under
+/// multi-thread contention.
+const _: () = {
+    use core::mem::offset_of;
+    let a = offset_of!(AllocStats, total_allocations);
+    let d = offset_of!(AllocStats, total_deallocations);
+    let b = offset_of!(AllocStats, bytes_allocated);
+    let p = offset_of!(AllocStats, bytes_peak);
+    let f = offset_of!(AllocStats, failures);
+    let c = offset_of!(AllocStats, corruption_events);
+    // No two contended counters share a cache line.
+    assert!(a / CACHE_LINE != d / CACHE_LINE);
+    assert!(a / CACHE_LINE != b / CACHE_LINE);
+    assert!(a / CACHE_LINE != p / CACHE_LINE);
+    assert!(a / CACHE_LINE != f / CACHE_LINE);
+    assert!(a / CACHE_LINE != c / CACHE_LINE);
+    assert!(d / CACHE_LINE != b / CACHE_LINE);
+    assert!(d / CACHE_LINE != p / CACHE_LINE);
+    assert!(d / CACHE_LINE != f / CACHE_LINE);
+    assert!(d / CACHE_LINE != c / CACHE_LINE);
+    assert!(b / CACHE_LINE != p / CACHE_LINE);
+    assert!(b / CACHE_LINE != f / CACHE_LINE);
+    assert!(b / CACHE_LINE != c / CACHE_LINE);
+    assert!(p / CACHE_LINE != f / CACHE_LINE);
+    assert!(p / CACHE_LINE != c / CACHE_LINE);
+    assert!(f / CACHE_LINE != c / CACHE_LINE);
+};
 
 /// Wrapper that records allocation activity in [`AllocStats`].
 ///
