@@ -132,6 +132,37 @@ impl<T> core::ops::DerefMut for CachePadded<T> {
 /// - **`m68k`**: 16 bytes.
 /// - **`s390x`**: 256 bytes.
 /// - Anything else: 64 bytes (historical x86 default).
+///
+/// # Use in a layout pin
+///
+/// Combine with [`core::mem::offset_of!`] to build a compile-time
+/// assertion that two contended fields in your own struct never share
+/// a cache line. forge-alloc uses this pattern internally on its own
+/// `AllocStats`, `Watermark`, `SharedBumpArena`, and `SlabInner` structs
+/// to lock in the cache-line separation invariants.
+///
+/// ```
+/// use forge_alloc_core::{CachePadded, CACHE_LINE};
+/// use core::sync::atomic::AtomicUsize;
+///
+/// struct MyStats {
+///     hits: CachePadded<AtomicUsize>,
+///     misses: CachePadded<AtomicUsize>,
+/// }
+///
+/// const _: () = {
+///     use core::mem::offset_of;
+///     assert!(
+///         offset_of!(MyStats, hits) / CACHE_LINE
+///             != offset_of!(MyStats, misses) / CACHE_LINE
+///     );
+/// };
+/// ```
+///
+/// The assertion fires at compile time. If a future refactor reorders
+/// the struct fields or drops the `CachePadded` wrappers, the build
+/// fails with a pointer at the affected struct rather than silently
+/// regressing throughput under multi-thread contention.
 #[cfg(any(
     target_arch = "x86_64",
     target_arch = "aarch64",
