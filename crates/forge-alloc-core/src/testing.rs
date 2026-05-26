@@ -124,8 +124,7 @@ pub fn assert_fixed_range_invariants<R: FixedRange>(r: &R) {
 /// Panics on the first violated invariant.
 #[track_caller]
 pub fn assert_allocator_basic_round_trip<A: Allocator>(a: &A) {
-    let layout =
-        NonZeroLayout::from_size_align(64, 8).expect("64/8 is a valid NonZeroLayout");
+    let layout = NonZeroLayout::from_size_align(64, 8).expect("64/8 is a valid NonZeroLayout");
 
     let p1 = a
         .allocate(layout)
@@ -254,8 +253,7 @@ pub fn assert_allocator_respects_alignment<A: Allocator>(a: &A) {
 pub fn assert_combined_invariants<A: Allocator + FixedRange>(a: &A) {
     assert_fixed_range_invariants(a);
 
-    let layout =
-        NonZeroLayout::from_size_align(64, 8).expect("64/8 is a valid NonZeroLayout");
+    let layout = NonZeroLayout::from_size_align(64, 8).expect("64/8 is a valid NonZeroLayout");
     let p = a
         .allocate(layout)
         .expect("64/8 allocation must succeed for combined check");

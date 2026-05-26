@@ -323,6 +323,9 @@ mod tests {
         let s2 = s1;
         let after = s2.base().as_ptr() as usize;
         assert_eq!(before, expected);
-        assert_eq!(after, expected, "base() must not change when the wrapper moves");
+        assert_eq!(
+            after, expected,
+            "base() must not change when the wrapper moves"
+        );
     }
 }
