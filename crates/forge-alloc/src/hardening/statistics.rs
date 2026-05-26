@@ -547,6 +547,7 @@ mod tests {
     ///    against the still-corrupted freelist.)
     ///
     #[test]
+    #[cfg(feature = "std")]
     fn corruption_events_propagates_from_slab_mac_failure() {
         use forge_alloc_core::FixedRange;
         let s = build();

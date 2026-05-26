@@ -289,7 +289,10 @@ where
     }
 }
 
-#[cfg(test)]
+// Gated on `feature = "std"` because the suite uses `System`, which
+// is std-only. The no_std-friendly `InlineBacked` is itself covered
+// by its own test module.
+#[cfg(all(test, feature = "std"))]
 mod tests {
     use super::*;
     use crate::backing::{InlineBacked, System};

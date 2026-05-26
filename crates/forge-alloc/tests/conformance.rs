@@ -3,6 +3,15 @@
 //! gate: any new backing or allocator added to forge-alloc should be
 //! exercised here so the helpers themselves keep working and the new
 //! impl is confirmed contract-compliant.
+//!
+//! Gated on `all(feature = "std", any(unix, windows))` because the
+//! suite imports `MmapBacked` / `HugePageBacked` / `System`. The
+//! no_std-friendly subset (`InlineBacked`, `StaticBacked`,
+//! `HeapBytes`) is also exercised here for convenience; their
+//! contract-conformance is independently covered by the in-crate
+//! unit tests under `#[cfg(test)] mod tests`.
+
+#![cfg(all(feature = "std", any(unix, windows)))]
 
 use forge_alloc::{
     BumpArena, HeapBytes, HugePageBacked, InlineBacked, MmapBacked, NonZeroLayout, StaticBacked,

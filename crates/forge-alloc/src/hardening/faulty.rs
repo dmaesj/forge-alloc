@@ -328,6 +328,7 @@ mod tests {
     /// `Faulty` drives `WithFallback`'s secondary branch: an
     /// `AlwaysFail` primary forces every request onto the fallback.
     #[test]
+    #[cfg(feature = "std")]
     fn faulty_forces_withfallback_onto_secondary() {
         use crate::backing::System;
         use crate::layout::WithFallback;

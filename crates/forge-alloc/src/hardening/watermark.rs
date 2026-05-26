@@ -703,6 +703,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "std")]
     fn fn_handler_called() {
         use std::sync::Mutex;
         let calls = std::sync::Arc::new(Mutex::new(0u32));

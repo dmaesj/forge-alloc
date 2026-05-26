@@ -286,7 +286,11 @@ mod tests {
     /// value across threads given a shared `&StaticBacked`. The
     /// compile-time `unsafe impl Sync` is necessary but not
     /// sufficient — this test pins the behavior at runtime.
+    /// Gated on `feature = "std"` because `std::thread::scope`
+    /// is std-only; the no_std lib still gets the `assert_sync`
+    /// compile-time test above.
     #[test]
+    #[cfg(feature = "std")]
     fn shared_ref_observes_same_address_from_two_threads() {
         let mut buf = [0u8; 4096];
         let parent_base = buf.as_mut_ptr() as usize;
