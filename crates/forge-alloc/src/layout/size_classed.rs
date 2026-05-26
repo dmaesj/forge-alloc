@@ -570,8 +570,12 @@ impl<B: Allocator + FixedRange, const CLASSES: usize> Drop for SizeClassed<B, CL
     }
 }
 
-#[cfg(test)]
-#[cfg(feature = "std")]
+// Test module uses `MmapBacked`, which since 0.3.1 is gated on
+// `all(feature = "std", any(unix, windows))`. The previous gate of
+// just `feature = "std"` would fail to compile on
+// `wasm32-wasip1+std` (and is masked today only by the proptest
+// dev-dep also failing on wasm32).
+#[cfg(all(test, feature = "std", any(unix, windows)))]
 mod tests {
     use super::*;
     use crate::backing::{InlineBacked, MmapBacked};
