@@ -15,12 +15,15 @@
 //!   linker-provided buffer, `static mut`, `Box::leak`ed slice) as a
 //!   `FixedRange`. Truly `no_std`: needs neither `alloc` nor `std`.
 //! - [`MmapBacked`] — OS-mapped anonymous region (`mmap` / `VirtualAlloc`),
-//!   `std`-only, also implements [`OsBacked`](forge_alloc_core::OsBacked).
+//!   gated on `feature = "std"` AND a `unix`-or-`windows` target. Also
+//!   implements [`OsBacked`](forge_alloc_core::OsBacked). On std-capable
+//!   non-unix-non-windows targets (e.g. `wasm32-wasip1`) the type is
+//!   not compiled in.
 //! - [`HugePageBacked`] — OS-mapped anonymous region backed by huge /
 //!   large pages (Linux `MAP_HUGETLB`, macOS `VM_FLAGS_SUPERPAGE_SIZE_ANY`,
-//!   Windows `MEM_LARGE_PAGES`), `std`-only. Errors when the platform
-//!   can't satisfy the request; pair with [`WithFallback`](crate::WithFallback)
-//!   for graceful degradation.
+//!   Windows `MEM_LARGE_PAGES`). Same gating as `MmapBacked`. Errors when
+//!   the platform can't satisfy the request; pair with
+//!   [`WithFallback`](crate::WithFallback) for graceful degradation.
 //! - [`HeapBytes`] — `FixedRange`-only owner of a single global-allocator
 //!   block. The heap twin of `MmapBacked` for cases where mmap-level
 //!   isolation isn't worth the syscall cost.
@@ -39,15 +42,20 @@ mod system;
 #[cfg(feature = "std")]
 pub use system::System;
 
-#[cfg(feature = "std")]
+// `mmap` and `huge_page_backed` make raw syscalls (`mmap` /
+// `VirtualAlloc`). They compile only on targets where libc / windows-sys
+// expose those, i.e. `unix` or `windows`. Std-capable but neither-unix-
+// nor-windows targets (notably `wasm32-wasip1`) deliberately don't get
+// these backings — the rest of the crate still works.
+#[cfg(all(feature = "std", any(unix, windows)))]
 mod mmap;
-#[cfg(feature = "std")]
+#[cfg(all(feature = "std", any(unix, windows)))]
 pub use mmap::{
     mmap_clear_last_os_error, mmap_last_os_error, mmap_record_os_error, page_size, MmapBacked,
     MmapFlags,
 };
 
-#[cfg(feature = "std")]
+#[cfg(all(feature = "std", any(unix, windows)))]
 mod huge_page_backed;
-#[cfg(feature = "std")]
+#[cfg(all(feature = "std", any(unix, windows)))]
 pub use huge_page_backed::HugePageBacked;

@@ -47,13 +47,17 @@ mod quarantine;
 mod statistics;
 mod watermark;
 
-#[cfg(feature = "std")]
+// `guard_page`, `huge_page`, `numa`, and `split_metadata` all depend
+// on `mmap` / libc syscall helpers, so they require both `std` and a
+// `unix || windows` target. (Std-capable but neither-unix-nor-windows
+// targets like `wasm32-wasip1` don't get them.)
+#[cfg(all(feature = "std", any(unix, windows)))]
 mod guard_page;
-#[cfg(feature = "std")]
+#[cfg(all(feature = "std", any(unix, windows)))]
 mod huge_page;
-#[cfg(feature = "std")]
+#[cfg(all(feature = "std", any(unix, windows)))]
 mod numa;
-#[cfg(feature = "std")]
+#[cfg(all(feature = "std", any(unix, windows)))]
 mod split_metadata;
 
 pub use cache_jitter::CacheJitter;
@@ -63,13 +67,13 @@ pub use poison::{PoisonOnFree, DEFAULT_POISON};
 pub use quarantine::Quarantine;
 pub use statistics::{AllocStats, Statistics};
 
-#[cfg(feature = "std")]
+#[cfg(all(feature = "std", any(unix, windows)))]
 pub use guard_page::GuardPage;
-#[cfg(feature = "std")]
+#[cfg(all(feature = "std", any(unix, windows)))]
 pub use huge_page::{default_huge_page_size, HugePageAligned};
-#[cfg(feature = "std")]
+#[cfg(all(feature = "std", any(unix, windows)))]
 pub use numa::{current_numa_node, NodeSet, NumaLocal, NumaPolicy};
-#[cfg(feature = "std")]
+#[cfg(all(feature = "std", any(unix, windows)))]
 pub use split_metadata::SplitMetadata;
 #[cfg(feature = "std")]
 pub use watermark::LogHandler;

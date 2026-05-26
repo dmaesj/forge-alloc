@@ -42,9 +42,11 @@ pub use size_classed::{SizeClassed, DEFAULT_CLASS_SIZES_8};
 pub use slab::Slab;
 pub use stack_alloc::StackAlloc;
 
-#[cfg(feature = "std")]
+// ExtendableSlab uses `MmapBacked` for its growable segments and so
+// inherits the same `unix || windows` constraint MmapBacked imposes.
+#[cfg(all(feature = "std", any(unix, windows)))]
 mod extendable_slab;
-#[cfg(feature = "std")]
+#[cfg(all(feature = "std", any(unix, windows)))]
 pub use extendable_slab::ExtendableSlab;
 
 #[cfg(feature = "std")]

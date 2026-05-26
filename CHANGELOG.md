@@ -51,6 +51,16 @@ changes. The 0.3.0 trait-decoupling release stands.
   `pub(super)` so `huge_page_backed` can reuse them. Single source
   of truth for the security-relevant prot-mapping table — the two
   backings can no longer silently diverge on a future revision.
+- `MmapBacked`, `HugePageBacked`, `ExtendableSlab`, `GuardPage`,
+  `HugePageAligned`, `NumaLocal`, `SplitMetadata`, and the
+  `HardenedSlab` type alias are now gated on
+  `cfg(all(feature = "std", any(unix, windows)))` (previously just
+  `feature = "std"`). The narrower gate fixes a pre-existing compile
+  failure on `wasm32-wasip1` and other std-capable-but-non-unix-non-
+  windows targets — the syscall helpers (`mmap`, `VirtualAlloc`,
+  `mbind`, etc.) those types depend on don't exist there. Such
+  targets still get the rest of the crate (`InlineBacked`,
+  `StaticBacked`, `HeapBytes`, `BumpArena`, `Slab`, etc.).
 
 ### Tests
 - New `crates/forge-alloc/tests/conformance.rs` integration test

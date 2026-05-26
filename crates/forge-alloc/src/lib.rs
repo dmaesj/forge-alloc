@@ -67,9 +67,13 @@ pub use backing::{HeapBytes, InlineBacked, StaticBacked, MAX_ALIGN};
 
 #[cfg(feature = "std")]
 #[doc(inline)]
+pub use backing::System;
+
+#[cfg(all(feature = "std", any(unix, windows)))]
+#[doc(inline)]
 pub use backing::{
     mmap_clear_last_os_error, mmap_last_os_error, mmap_record_os_error, page_size, HugePageBacked,
-    MmapBacked, MmapFlags, System,
+    MmapBacked, MmapFlags,
 };
 
 #[doc(inline)]
@@ -84,20 +88,26 @@ pub use layout::SharedBumpArena;
 
 #[cfg(feature = "std")]
 #[doc(inline)]
-pub use layout::{
-    BatchPolicy, ExtendableSlab, SlabOwner, SlabRemote, ADAPTIVE_COOLDOWN_TICKS, ADAPTIVE_LEVELS,
-};
+pub use layout::{BatchPolicy, SlabOwner, SlabRemote, ADAPTIVE_COOLDOWN_TICKS, ADAPTIVE_LEVELS};
+
+// ExtendableSlab is gated on `unix || windows` because it depends on
+// `MmapBacked` for its growable segments.
+#[cfg(all(feature = "std", any(unix, windows)))]
+#[doc(inline)]
+pub use layout::ExtendableSlab;
 
 #[doc(inline)]
 pub use hardening::{
     AllocStats, CacheJitter, Canary, Faulty, PoisonOnFree, Quarantine, Statistics, DEFAULT_POISON,
 };
 
-#[cfg(feature = "std")]
+// These hardening wrappers require libc / Win32 syscalls and so are
+// gated on `unix || windows` in addition to `feature = "std"`.
+#[cfg(all(feature = "std", any(unix, windows)))]
 #[doc(inline)]
 pub use hardening::SplitMetadata;
 
-#[cfg(feature = "std")]
+#[cfg(all(feature = "std", any(unix, windows)))]
 #[doc(inline)]
 pub use hardening::{
     current_numa_node, default_huge_page_size, GuardPage, HugePageAligned, NodeSet, NumaLocal,
@@ -160,5 +170,5 @@ pub use hardening::LogHandler;
 ///
 /// On aarch64 with the `pac-stub` (and eventually `pac`) feature
 /// enabled, `PacMAC` is available as the parameter.
-#[cfg(feature = "std")]
+#[cfg(all(feature = "std", any(unix, windows)))]
 pub type HardenedSlab<T, M = NoProtection> = Slab<T, GuardPage<SplitMetadata<MmapBacked>>, M>;
