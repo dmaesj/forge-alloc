@@ -51,6 +51,7 @@ fn bump_arena_over_static_backed_meets_contract() {
 }
 
 #[test]
+#[cfg_attr(miri, ignore = "miri can't shim mmap / VirtualAlloc")]
 fn mmap_backed_meets_contract() {
     let m = MmapBacked::new(16 * 1024).unwrap();
     assert_combined_invariants(&m);
@@ -58,19 +59,26 @@ fn mmap_backed_meets_contract() {
     assert_allocator_respects_alignment(&m);
 }
 
-/// `HugePageBacked` exercise gated on platform support: when the
-/// kernel can't satisfy a 2 MiB huge-page request (CI runners with
-/// no `nr_hugepages` reservation, Apple Silicon, Android, etc.),
-/// silently skip. When it can, validate the same contract every
-/// other backing meets.
+/// `HugePageBacked` exercise opt-in via the
+/// `FORGE_ALLOC_HUGE_PAGES_AVAILABLE=1` env var (matches the
+/// in-file unit test pattern). Without the flag, the kernel
+/// huge-page pool is assumed unavailable and the test exits early
+/// rather than silently passing on every CI runner. With the flag
+/// set, validates the same contract every other backing meets.
 #[test]
+#[cfg_attr(miri, ignore = "miri can't shim mmap / VirtualAlloc")]
 fn huge_page_backed_meets_contract_when_supported() {
-    if let Ok(h) = HugePageBacked::new(2 * 1024 * 1024) {
-        assert_combined_invariants(&h);
+    if std::env::var_os("FORGE_ALLOC_HUGE_PAGES_AVAILABLE").as_deref()
+        != Some(std::ffi::OsStr::new("1"))
+    {
+        return;
     }
-    if let Ok(h) = HugePageBacked::new(2 * 1024 * 1024) {
-        assert_allocator_respects_alignment(&h);
-    }
+    let h = HugePageBacked::new(2 * 1024 * 1024)
+        .expect("FORGE_ALLOC_HUGE_PAGES_AVAILABLE=1 was set but the alloc still failed");
+    assert_combined_invariants(&h);
+    let h2 = HugePageBacked::new(2 * 1024 * 1024)
+        .expect("second huge-page alloc failed under opt-in flag");
+    assert_allocator_respects_alignment(&h2);
 }
 
 #[test]

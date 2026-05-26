@@ -37,8 +37,11 @@ use super::mmap::{mmap_clear_last_os_error, mmap_last_os_error};
 
 /// Platform-default huge / large page size in bytes.
 ///
-/// Matches `hardening::default_huge_page_size`. Duplicated here so
-/// the backing layer doesn't reach into hardening.
+/// Mirrors `hardening::default_huge_page_size` for non-Apple targets.
+/// Duplicated here so the backing layer doesn't reach into hardening.
+/// On aarch64 macOS this intentionally returns 2 MiB (not 32 MiB as
+/// the hardening version does) because the backing path errors before
+/// any syscall regardless of the size used for rounding.
 ///
 /// - x86_64 / aarch64 (non-Apple) Linux & Windows: 2 MiB.
 /// - aarch64 macOS (Apple Silicon, 16 KiB native granule): 2 MiB —
@@ -609,12 +612,20 @@ mod tests {
         // 16 GiB: `34 << 26` overflows i32 if you do the shift in
         // signed arithmetic. The helper does it in u32 so this
         // must succeed.
-        let sixteen_gib = 16_usize * 1024 * 1024 * 1024;
-        let encoded = encode_huge_size_linux(sixteen_gib);
-        // Compare against the libc constant when present; libc gates
-        // MAP_HUGE_16GB on the same targets that expose MAP_HUGE_SHIFT,
-        // so this should always be available.
-        assert_eq!(encoded, libc::MAP_HUGE_16GB, "16 GiB encoding mismatch");
+        //
+        // Gate on 64-bit pointer width: `16_usize * 1024 * 1024 * 1024`
+        // = 2^34 overflows `usize` on 32-bit Linux (i686, armv7l) where
+        // `usize` = `u32`. 16 GiB huge-page pools are 64-bit only in
+        // practice, so the test restriction matches reality.
+        #[cfg(target_pointer_width = "64")]
+        {
+            let sixteen_gib = 16_usize * 1024 * 1024 * 1024;
+            let encoded = encode_huge_size_linux(sixteen_gib);
+            // Compare against the libc constant when present; libc gates
+            // MAP_HUGE_16GB on the same targets that expose MAP_HUGE_SHIFT,
+            // so this should always be available on 64-bit Linux.
+            assert_eq!(encoded, libc::MAP_HUGE_16GB, "16 GiB encoding mismatch");
+        }
     }
 
     /// Probe whether the platform can actually allocate huge pages

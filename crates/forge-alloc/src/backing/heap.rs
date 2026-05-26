@@ -260,7 +260,14 @@ mod tests {
 
     #[test]
     fn new_zeroed_returns_zeroed_block() {
-        for size in [1_usize, 16, 64, 1024, 64 * 1024, 1024 * 1024] {
+        // Cap the max size under Miri so the byte-by-byte verify
+        // loop doesn't blow CI's Miri-step budget. Native test
+        // covers the full progression.
+        #[cfg(not(miri))]
+        let sizes: &[usize] = &[1, 16, 64, 1024, 64 * 1024, 1024 * 1024];
+        #[cfg(miri)]
+        let sizes: &[usize] = &[1, 16, 64, 1024];
+        for &size in sizes {
             let h = HeapBytes::new_zeroed(size).unwrap();
             let base = h.base().as_ptr();
             assert_eq!(h.size(), size);

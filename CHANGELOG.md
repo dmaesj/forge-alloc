@@ -52,6 +52,16 @@ changes. The 0.3.0 trait-decoupling release stands.
   of truth for the security-relevant prot-mapping table — the two
   backings can no longer silently diverge on a future revision.
 
+### Tests
+- New `crates/forge-alloc/tests/conformance.rs` integration test
+  binary that exercises the `forge_alloc_core::testing`
+  conformance helpers against every in-crate backing
+  (`InlineBacked`, `StaticBacked`, `HeapBytes`,
+  `BumpArena<HeapBytes>`, `BumpArena<StaticBacked<'_>>`,
+  `MmapBacked`, `HugePageBacked`, `System`). Doubles as the
+  regression gate that any new backing added to the family ships
+  with a contract-conforming impl.
+
 ## [0.3.0] - 2026-05-25 (includes forge-alloc-core 0.2.0)
 
 ### Changed (BREAKING - `forge-alloc-core` trait surface)
