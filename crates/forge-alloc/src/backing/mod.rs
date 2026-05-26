@@ -13,10 +13,15 @@
 //! - [`InlineBacked<N>`] — fixed-size inline storage, `no_std`-friendly.
 //! - [`MmapBacked`] — OS-mapped anonymous region (`mmap` / `VirtualAlloc`),
 //!   `std`-only, also implements [`OsBacked`](forge_alloc_core::OsBacked).
+//! - [`HeapBytes`] — `FixedRange`-only owner of a single global-allocator
+//!   block. The heap twin of `MmapBacked` for cases where mmap-level
+//!   isolation isn't worth the syscall cost.
 //! - [`System`] — thin newtype over [`std::alloc::System`] for use as a
 //!   fallback backing in `WithFallback<Inner, System>`.
 
+mod heap;
 mod inline;
+pub use heap::HeapBytes;
 pub use inline::{InlineBacked, MAX_ALIGN};
 
 #[cfg(feature = "std")]

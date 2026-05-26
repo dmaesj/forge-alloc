@@ -55,7 +55,7 @@ mod layout;
 pub use forge_alloc_core::*;
 
 #[doc(inline)]
-pub use backing::{InlineBacked, MAX_ALIGN};
+pub use backing::{HeapBytes, InlineBacked, MAX_ALIGN};
 
 #[cfg(feature = "std")]
 #[doc(inline)]

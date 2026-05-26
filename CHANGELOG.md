@@ -7,6 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-05-25 (includes forge-alloc-core 0.2.0)
+
+### Changed (BREAKING - `forge-alloc-core` trait surface)
+- `forge_alloc_core::FixedRange` no longer has `Allocator` as a
+  supertrait. The two concerns are independent: a type can own a
+  contiguous block of bytes without itself being able to carve
+  allocations out of that block, and conversely an allocator does not
+  need a fixed address range. This decoupling unblocks pure region-
+  owner types such as the new `HeapBytes`.
+
+  **Migration:** anywhere your code took `T: FixedRange` and called
+  `T::allocate(...)` (the `Allocator` trait method), change the bound
+  to `T: Allocator + FixedRange`. Code that only called
+  `T::base()` / `T::size()` / `T::contains()` (the `FixedRange`-native
+  methods) needs no change. Internal forge-alloc audit turned up one
+  such site (`Quarantine`'s `FixedRange` impl); every other in-tree
+  bound was already `Allocator + FixedRange` explicitly.
+
+  `forge-alloc-core` bumps to `0.2.0` for this trait relaxation;
+  `forge-alloc` bumps to `0.3.0` because the relaxed trait surfaces
+  through its re-exports.
+
+### Added
+- `forge_alloc::HeapBytes`: a `FixedRange`-only owner of a single
+  global-allocator block. Pair with `BumpArena<HeapBytes>` for bump
+  semantics, or `Slab<T, BumpArena<HeapBytes>>` for typed slots, when
+  you need a contiguous bounded region but the mmap-level isolation
+  of `MmapBacked` isn't worth the ~10-50 µs `mmap` / `VirtualAlloc`
+  syscall cost. Deliberately FixedRange-only (no internal bump
+  cursor) — bump semantics live in `BumpArena<B>`. Not std-gated;
+  uses `allocator_api2::alloc::Global`.
+- `MmapBacked` rustdoc gains a `# See also` cross-link to `HeapBytes`
+  so a reader picking between the two finds the syscall-cost /
+  VM-isolation trade-off immediately.
+
 ## [forge-alloc-core 0.1.2] - 2026-05-25 (docs-only)
 
 Patch release of `forge-alloc-core` only. `forge-alloc` stays at 0.2.1
@@ -294,7 +329,8 @@ picked up automatically by `cargo update`.
   `Handle<T, G>`, `SlabOwner<T, B>` / `SlabRemote<T, B>` /
   `RemoteFreeQueue`.
 
-[Unreleased]: https://github.com/dmaesj/forge-alloc/compare/forge-alloc-core-v0.1.2...HEAD
+[Unreleased]: https://github.com/dmaesj/forge-alloc/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/dmaesj/forge-alloc/compare/forge-alloc-core-v0.1.2...v0.3.0
 [forge-alloc-core 0.1.2]: https://github.com/dmaesj/forge-alloc/compare/v0.2.1...forge-alloc-core-v0.1.2
 [0.2.1]: https://github.com/dmaesj/forge-alloc/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/dmaesj/forge-alloc/compare/v0.1.0...v0.2.0

@@ -198,7 +198,7 @@ unsafe impl<I: Allocator, const EPOCHS: usize> Allocator for Quarantine<I, EPOCH
     // desired behavior — grown-out buffers must respect the quarantine.
 }
 
-impl<I: FixedRange, const EPOCHS: usize> FixedRange for Quarantine<I, EPOCHS> {
+impl<I: Allocator + FixedRange, const EPOCHS: usize> FixedRange for Quarantine<I, EPOCHS> {
     #[inline]
     fn base(&self) -> NonNull<u8> {
         self.inner.base()

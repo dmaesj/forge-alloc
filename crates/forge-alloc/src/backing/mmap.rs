@@ -7,6 +7,15 @@
 //! region is laid out bump-style — each `allocate` advances a cursor through
 //! the mapping; `deallocate` is a no-op. Higher layers (`BumpArena`, `Slab`)
 //! impose their own structure on what they receive.
+//!
+//! # See also
+//!
+//! [`HeapBytes`](crate::HeapBytes) is the heap twin of `MmapBacked`'s
+//! region-ownership half: a `FixedRange`-only owner of a single
+//! global-allocator block, no syscalls. Use `HeapBytes` (under a
+//! `BumpArena`) when you need a contiguous bounded region but the
+//! mmap-level isolation (separate VM area, guard-page potential) isn't
+//! worth the ~10-50 µs `mmap` / `VirtualAlloc` cost.
 
 use core::cell::UnsafeCell;
 use core::ptr::NonNull;

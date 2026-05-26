@@ -1,25 +1,39 @@
-//! `FixedRange` — allocators whose address range is determined at construction
-//! and never changes.
+//! `FixedRange` — types whose owned address range is determined at
+//! construction and never changes.
 //!
-//! Required by `WithFallback<P: FixedRange, S>` so that deallocation can be
-//! routed correctly: `primary.contains(ptr)` returns whether the pointer came
-//! from the primary or must go to the secondary. Growing allocators
-//! (`ExtendableSlab`) deliberately do *not* implement `FixedRange`.
+//! Required by `WithFallback<P: Allocator + FixedRange, S>` so deallocation
+//! can be routed correctly: `primary.contains(ptr)` reports whether the
+//! pointer came from the primary or must go to the secondary. Growing
+//! allocators (`ExtendableSlab`) deliberately do *not* implement
+//! `FixedRange`.
+//!
+//! # Decoupled from `Allocator`
+//!
+//! `FixedRange` does NOT have `Allocator` as a supertrait. The two concerns
+//! are independent: a type can own a contiguous block of bytes without
+//! itself being able to carve allocations out of that block. Composition
+//! handles the gap: pair a `FixedRange`-only region owner (such as
+//! `forge_alloc::HeapBytes`) with `forge_alloc::BumpArena` (which carries
+//! the bump cursor) to get an `Allocator` over the region.
+//!
+//! Most existing primitives (`InlineBacked`, `MmapBacked`, `BumpArena`,
+//! `Slab`) implement BOTH `FixedRange` and `Allocator` — they double-duty
+//! as region owners and allocators. Downstream code that needs both
+//! capabilities should write `B: Allocator + FixedRange` explicitly rather
+//! than relying on a supertrait link.
 
 use core::ptr::NonNull;
-
-use super::allocator::Allocator;
 
 /// Address range fixed at construction.
 ///
 /// Once constructed, [`base`](Self::base) and [`size`](Self::size) never
 /// change. The default [`contains`](Self::contains) check is sufficient for
 /// pointer-provenance routing in `WithFallback`.
-pub trait FixedRange: Allocator {
-    /// First byte of the allocator's address range.
+pub trait FixedRange {
+    /// First byte of the owned address range.
     fn base(&self) -> NonNull<u8>;
 
-    /// Length in bytes of the allocator's address range.
+    /// Length in bytes of the owned address range.
     fn size(&self) -> usize;
 
     /// Whether `ptr` lies within `[base, base + size)`.
