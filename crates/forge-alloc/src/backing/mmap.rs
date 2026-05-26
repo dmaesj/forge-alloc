@@ -106,8 +106,13 @@ pub fn mmap_record_os_error() {
 /// syscall failure left on this thread, or `None`, both of which are
 /// misleading. EINVAL is the universal "validation failed" signal on
 /// Unix (errno 22) and Windows (`ERROR_INVALID_PARAMETER`, 87).
+///
+/// `pub(super)` so the sibling `huge_page_backed` module can reuse the
+/// same per-thread slot for its own pre-syscall rejections without
+/// round-tripping through the platform's `errno` / `GetLastError`
+/// thread-local (which any allocator call in between could clobber).
 #[inline]
-fn capture_synthetic_einval() {
+pub(super) fn capture_synthetic_einval() {
     #[cfg(unix)]
     let code: i32 = libc::EINVAL;
     #[cfg(windows)]
@@ -585,7 +590,7 @@ unsafe fn os_release_pages(ptr: NonNull<u8>, size: usize) {
 /// [`win32_prot_from_flags`] — each Unix arm maps bit-exactly, unlike
 /// Win32 which cannot express write-without-read combinations natively.
 #[cfg(unix)]
-fn unix_prot_from_flags(flags: ProtectFlags) -> i32 {
+pub(super) fn unix_prot_from_flags(flags: ProtectFlags) -> i32 {
     // PROT_NONE is 0 on every Unix; the explicit assignment in the
     // "all-false" branch below documents intent without changing bits.
     let mut prot = 0i32;
@@ -641,7 +646,7 @@ unsafe fn os_protect(ptr: NonNull<u8>, size: usize, flags: ProtectFlags) {
 /// the debug_assert in [`os_protect`] (which fires on write-without-read,
 /// the only combination that the helper genuinely cannot express).
 #[cfg(windows)]
-fn win32_prot_from_flags(flags: ProtectFlags) -> u32 {
+pub(super) fn win32_prot_from_flags(flags: ProtectFlags) -> u32 {
     use windows_sys::Win32::System::Memory::{
         PAGE_EXECUTE, PAGE_EXECUTE_READ, PAGE_EXECUTE_READWRITE, PAGE_NOACCESS, PAGE_READONLY,
         PAGE_READWRITE,

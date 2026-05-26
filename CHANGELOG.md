@@ -7,6 +7,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-05-25 (includes forge-alloc-core 0.2.1)
+
+Additive release: three new backing primitives, a calloc variant on
+`HeapBytes`, and a public `forge_alloc_core::testing` module of
+conformance helpers for downstream allocator authors. No breaking
+changes. The 0.3.0 trait-decoupling release stands.
+
+### Added — `forge-alloc`
+- `forge_alloc::StaticBacked<'a>`: borrows an external `&'a mut [u8]`
+  as a `FixedRange`. The most no_std-friendly backing in the family:
+  no `alloc`, no syscalls. Use with linker-provided buffers,
+  `static mut` arrays, or `Box::leak`ed slices. Pair with
+  `BumpArena<StaticBacked<'_>>` for typed allocation in bare-metal
+  contexts.
+- `forge_alloc::HugePageBacked`: OS-mapped anonymous region backed
+  by huge / large pages. Linux `MAP_HUGETLB | MAP_HUGE_<size>`,
+  macOS x86_64 `VM_FLAGS_SUPERPAGE_SIZE_ANY`, Windows
+  `MEM_LARGE_PAGES`. Returns `AllocError` on platforms without a
+  userspace huge-page API (aarch64 macOS, iOS, Android, other
+  Unix) — compose with `WithFallback<HugePageBacked, MmapBacked>`
+  for graceful degradation. Implements `Allocator + FixedRange +
+  OsBacked` as a drop-in for `MmapBacked`.
+- `HeapBytes::new_zeroed` / `HeapBytes::with_align_zeroed`: calloc
+  variants that route through `Global::allocate_zeroed`. With the
+  default `System` allocator, large allocations typically get fresh
+  zero pages from the kernel without a userspace memset.
+
+### Added — `forge-alloc-core` 0.2.1
+- New `forge_alloc_core::testing` module with conformance helpers
+  for downstream `Allocator` / `FixedRange` implementers:
+  `assert_fixed_range_invariants`,
+  `assert_allocator_basic_round_trip`,
+  `assert_allocator_respects_alignment`,
+  `assert_combined_invariants`. Each is `#[track_caller]` so
+  failures point at the calling test, not at the helper. Alignment
+  probe covers `1..=512` so `CACHE_LINE`-sized requests are
+  exercised on every supported target.
+
+### Changed
+- `forge_alloc::backing::mmap`'s `capture_synthetic_einval` and the
+  `unix_prot_from_flags` / `win32_prot_from_flags` helpers are now
+  `pub(super)` so `huge_page_backed` can reuse them. Single source
+  of truth for the security-relevant prot-mapping table — the two
+  backings can no longer silently diverge on a future revision.
+
 ## [0.3.0] - 2026-05-25 (includes forge-alloc-core 0.2.0)
 
 ### Changed (BREAKING - `forge-alloc-core` trait surface)
@@ -329,7 +374,8 @@ picked up automatically by `cargo update`.
   `Handle<T, G>`, `SlabOwner<T, B>` / `SlabRemote<T, B>` /
   `RemoteFreeQueue`.
 
-[Unreleased]: https://github.com/dmaesj/forge-alloc/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/dmaesj/forge-alloc/compare/v0.3.1...HEAD
+[0.3.1]: https://github.com/dmaesj/forge-alloc/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/dmaesj/forge-alloc/compare/forge-alloc-core-v0.1.2...v0.3.0
 [forge-alloc-core 0.1.2]: https://github.com/dmaesj/forge-alloc/compare/v0.2.1...forge-alloc-core-v0.1.2
 [0.2.1]: https://github.com/dmaesj/forge-alloc/compare/v0.2.0...v0.2.1

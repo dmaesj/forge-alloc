@@ -18,6 +18,14 @@
 //! Higher layers (the `backing`, `layout`, `hardening` modules) consume these
 //! traits to produce primitive types; the `forge-alloc` crate re-exports
 //! everything for convenience.
+//!
+//! # `testing` module
+//!
+//! Conformance helpers ([`testing::assert_fixed_range_invariants`],
+//! [`testing::assert_allocator_basic_round_trip`], etc.) live under
+//! [`testing`] for downstream crates that implement [`FixedRange`] or
+//! [`Allocator`] and want a ready-made trait-contract validator in
+//! their `#[test]` suite.
 
 #![cfg_attr(not(feature = "std"), no_std)]
 #![deny(unsafe_op_in_unsafe_fn)]
@@ -26,6 +34,7 @@
 extern crate alloc;
 
 pub mod cache_padded;
+pub mod testing;
 pub mod traits;
 
 pub use cache_padded::{CachePadded, CACHE_LINE};

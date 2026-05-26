@@ -69,10 +69,30 @@ pub struct HeapBytes {
 impl HeapBytes {
     /// Allocate `size` bytes from the global allocator, aligned to
     /// [`MAX_ALIGN`](crate::MAX_ALIGN). Errors if `size == 0` or the
-    /// allocator returns `AllocError`.
+    /// allocator returns `AllocError`. Block contents are
+    /// uninitialized; use [`new_zeroed`](Self::new_zeroed) if you
+    /// need calloc semantics.
     #[inline]
     pub fn new(size: usize) -> Result<Self, AllocError> {
         Self::with_align(size, crate::MAX_ALIGN)
+    }
+
+    /// Allocate `size` bytes from the global allocator, zero-initialized,
+    /// aligned to [`MAX_ALIGN`](crate::MAX_ALIGN). Same error
+    /// conditions as [`new`](Self::new).
+    ///
+    /// Delegates to the global allocator's `allocate_zeroed`. With
+    /// the default `System` allocator this typically calls `calloc`
+    /// (which on glibc/musl Linux and macOS, large allocations
+    /// above `MMAP_THRESHOLD` get fresh `mmap`-backed zero pages
+    /// without a userspace memset; smaller heap-arena allocations
+    /// still memset). With a custom `#[global_allocator]`
+    /// (`jemalloc`, `mimalloc`, `snmalloc`) the actual behavior
+    /// depends on the impl — most do a memset for any cached
+    /// block.
+    #[inline]
+    pub fn new_zeroed(size: usize) -> Result<Self, AllocError> {
+        Self::with_align_zeroed(size, crate::MAX_ALIGN)
     }
 
     /// Allocate `size` bytes from the global allocator with a custom
@@ -94,6 +114,19 @@ impl HeapBytes {
         Ok(Self { ptr, block_layout })
     }
 
+    /// Allocate `size` bytes from the global allocator with a custom
+    /// alignment, zero-initialized. Same error conditions as
+    /// [`with_align`](Self::with_align).
+    pub fn with_align_zeroed(size: usize, align: usize) -> Result<Self, AllocError> {
+        if size == 0 || align == 0 || !align.is_power_of_two() {
+            return Err(AllocError);
+        }
+        let block_layout = NonZeroLayout::from_size_align(size, align).map_err(|_| AllocError)?;
+        let block = A2::allocate_zeroed(&Global, block_layout.to_layout())?;
+        let ptr = block.cast::<u8>();
+        Ok(Self { ptr, block_layout })
+    }
+
     /// Capacity in bytes — equal to the size requested at construction.
     #[inline]
     pub const fn capacity(&self) -> usize {
@@ -104,8 +137,12 @@ impl HeapBytes {
 impl Drop for HeapBytes {
     fn drop(&mut self) {
         // SAFETY:
-        // - `self.ptr` came from `Global::allocate(self.block_layout.to_layout())`
-        //   in `with_align`; no other code path produces a `HeapBytes`.
+        // - `self.ptr` came from either `Global::allocate`
+        //   (`with_align`) or `Global::allocate_zeroed`
+        //   (`with_align_zeroed`); no other code path produces a
+        //   `HeapBytes`. Both satisfy `Global::deallocate`'s
+        //   contract identically — zero-init at allocation time
+        //   does not change the deallocation requirements.
         // - We hand back the *same* layout we used to allocate, satisfying
         //   the `GlobalAlloc::dealloc` contract.
         // - No `Clone` impl, no path that copies `self.ptr` outside the
@@ -218,6 +255,48 @@ mod tests {
                 "allocation at {addr:#x} must lie in region [{base:#x}, {:#x})",
                 base + size,
             );
+        }
+    }
+
+    #[test]
+    fn new_zeroed_returns_zeroed_block() {
+        for size in [1_usize, 16, 64, 1024, 64 * 1024, 1024 * 1024] {
+            let h = HeapBytes::new_zeroed(size).unwrap();
+            let base = h.base().as_ptr();
+            assert_eq!(h.size(), size);
+            // SAFETY: base..base+size is the freshly allocated block we own;
+            // reading bytes is sound, the bytes are guaranteed initialized
+            // to zero by `Global::allocate_zeroed`.
+            unsafe {
+                for i in 0..size {
+                    assert_eq!(*base.add(i), 0, "size={size}, byte {i} must be zero");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn new_zeroed_zero_size_errors() {
+        assert!(HeapBytes::new_zeroed(0).is_err());
+    }
+
+    #[test]
+    fn with_align_zeroed_validates_args_same_as_with_align() {
+        // Same validation table as with_align.
+        assert!(HeapBytes::with_align_zeroed(64, 0).is_err());
+        for bad in [3_usize, 5, 6, 12, 24] {
+            assert!(HeapBytes::with_align_zeroed(64, bad).is_err());
+        }
+        for align in [1_usize, 2, 4, 8, 16, 32, 64, 128, 256] {
+            let h = HeapBytes::with_align_zeroed(1024, align).unwrap();
+            assert_eq!(h.capacity(), 1024);
+            // Spot-check first and last byte are zero.
+            let base = h.base().as_ptr();
+            // SAFETY: in-range reads on a zeroed block we own.
+            unsafe {
+                assert_eq!(*base, 0);
+                assert_eq!(*base.add(1023), 0);
+            }
         }
     }
 

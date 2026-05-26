@@ -55,13 +55,13 @@ mod layout;
 pub use forge_alloc_core::*;
 
 #[doc(inline)]
-pub use backing::{HeapBytes, InlineBacked, MAX_ALIGN};
+pub use backing::{HeapBytes, InlineBacked, StaticBacked, MAX_ALIGN};
 
 #[cfg(feature = "std")]
 #[doc(inline)]
 pub use backing::{
-    mmap_clear_last_os_error, mmap_last_os_error, mmap_record_os_error, page_size, MmapBacked,
-    MmapFlags, System,
+    mmap_clear_last_os_error, mmap_last_os_error, mmap_record_os_error, page_size, HugePageBacked,
+    MmapBacked, MmapFlags, System,
 };
 
 #[doc(inline)]
