@@ -31,9 +31,9 @@ use forge_alloc_core::{
     AllocError, Allocator, Deallocator, FixedRange, NonZeroLayout, OsBacked, ProtectFlags,
 };
 
-use super::mmap::capture_synthetic_einval;
-#[allow(unused_imports)] // referenced by the public docs on this module
-use super::mmap::{mmap_clear_last_os_error, mmap_last_os_error, mmap_record_os_error};
+use super::mmap::{capture_synthetic_einval, mmap_record_os_error};
+#[cfg(test)]
+use super::mmap::{mmap_clear_last_os_error, mmap_last_os_error};
 
 /// Platform-default huge / large page size in bytes.
 ///
@@ -75,14 +75,13 @@ pub struct HugePageBacked {
     cursor: UnsafeCell<usize>,
 }
 
-// Compile-time guard: a future contributor adding `unsafe impl Sync`
-// would silently race on the cursor; this assertion fires at build
-// time if that ever happens.
-const _: () = {
-    const fn assert_not_sync<T: ?Sized>() {}
-    // `UnsafeCell<usize>` is `!Sync`; struct inherits.
-    assert_not_sync::<HugePageBacked>();
-};
+// !Sync is structural: the `cursor: UnsafeCell<usize>` field
+// auto-derives `!Sync`, which is what `Allocator::allocate(&self, ..)`
+// relies on for cursor safety. We deliberately do NOT add a
+// compile-time `!Sync` assertion: stable Rust has no negative trait
+// bounds, and the obvious `fn assert_not_sync<T>()` body is a no-op
+// that pretends to enforce what it doesn't. Mirrors `MmapBacked`'s
+// (also unguarded) shape.
 
 impl HugePageBacked {
     /// Allocate an anonymous huge-page mapping of at least `min_size`
@@ -93,8 +92,8 @@ impl HugePageBacked {
     /// request (no reserved huge pages, missing privilege, or the
     /// platform doesn't expose a userspace huge-page API at all —
     /// notably aarch64 macOS, iOS, Android, and other Unix). Read
-    /// [`mmap_last_os_error`] on the failing thread for the kernel
-    /// error code.
+    /// [`crate::mmap_last_os_error`] on the failing thread for the
+    /// kernel error code.
     pub fn new(min_size: usize) -> Result<Self, AllocError> {
         Self::with_huge_page_size(min_size, default_huge_page_size())
     }
@@ -267,16 +266,40 @@ unsafe impl Send for HugePageBacked {}
 // Platform glue
 // ============================================================================
 
+/// Encode an `hp_size` (power-of-two byte count) into the
+/// `MAP_HUGE_<size>` bits Linux expects in the `mmap` flag argument.
+///
+/// The kernel reads the size selector from bits
+/// `MAP_HUGE_SHIFT..(MAP_HUGE_SHIFT + 6)` of the flags `int`, so we
+/// compute the shift in `u32` (where any valid `log2(hp_size) << 26`
+/// fits with room to spare) and bit-preserve-cast to `i32`. A naive
+/// `(hp_log2 as i32) << 26` panics in debug for `hp_size >= 4 GiB`
+/// (`hp_log2 = 32`, exceeding `i32::MAX` after the shift) and
+/// silently wraps in release — see `libc::MAP_HUGE_16GB` which is
+/// itself a wrapped-negative `c_int`, but the kernel only cares
+/// about the bit pattern. Doing the math in `u32` avoids the
+/// overflow trip entirely.
+#[cfg(target_os = "linux")]
+fn encode_huge_size_linux(hp_size: usize) -> i32 {
+    let hp_log2: u32 = hp_size.trailing_zeros();
+    // SAFETY of the math: hp_log2 in [12, 63] (constructor validates
+    // hp_size >= 4096 and power-of-two; 4096 = 2^12, usize::MAX
+    // covers 2^63). MAP_HUGE_SHIFT == 26 < 32 so the u32 shift
+    // amount never panics. The shifted value (max 63 << 26 =
+    // 0xFC000000) fits in u32; the bit-preserving `as i32` cast
+    // gives the same bit pattern the kernel ABI expects.
+    (hp_log2 << libc::MAP_HUGE_SHIFT as u32) as i32
+}
+
 #[cfg(target_os = "linux")]
 unsafe fn os_map_huge(len: usize, hp_size: usize) -> Result<NonNull<u8>, AllocError> {
     // Encode the explicit huge-page-size into the mmap flags so the
     // kernel draws from the matching pool (2 MiB / 1 GiB / 16 GiB).
-    // Bare `MAP_HUGETLB` defaults to whatever `/proc/sys/vm/nr_hugepages`
-    // exposes — which may not match the `hp_size` we just used to
-    // round `len`, giving the kernel a length it rejects with EINVAL.
-    // `MAP_HUGE_2MB` etc. is encoded as `(log2(hp_size)) << MAP_HUGE_SHIFT`.
-    let hp_log2 = hp_size.trailing_zeros() as i32;
-    let huge_flag = libc::MAP_HUGETLB | (hp_log2 << libc::MAP_HUGE_SHIFT);
+    // Bare `MAP_HUGETLB` defaults to whatever the kernel's default
+    // huge page is — which may not match the `hp_size` we just used
+    // to round `len`, giving the kernel a length it rejects with
+    // EINVAL.
+    let huge_flag = libc::MAP_HUGETLB | encode_huge_size_linux(hp_size);
     // SAFETY: mmap with MAP_ANONYMOUS|MAP_PRIVATE|MAP_HUGETLB plus
     // the page-size-encoding bits, non-zero len already rounded to a
     // multiple of `hp_size` by the caller. Returns MAP_FAILED on
@@ -362,7 +385,6 @@ unsafe fn os_map_huge(len: usize, _hp_size: usize) -> Result<NonNull<u8>, AllocE
         not(target_os = "macos"),
         not(target_os = "ios"),
         not(target_os = "android"),
-        not(windows),
     ),
 ))]
 unsafe fn os_map_huge(_len: usize, _hp_size: usize) -> Result<NonNull<u8>, AllocError> {
@@ -527,12 +549,17 @@ mod tests {
 
     #[test]
     fn rejects_bad_huge_page_size() {
-        // Non-power-of-two.
-        assert!(HugePageBacked::with_huge_page_size(1 << 21, 3 * 1024 * 1024).is_err());
-        // Below 4 KiB.
-        assert!(HugePageBacked::with_huge_page_size(1 << 21, 2048).is_err());
-        // Power-of-two but tiny — also rejected via the >=4096 check.
-        assert!(HugePageBacked::with_huge_page_size(1 << 21, 512).is_err());
+        for bad in [3 * 1024 * 1024_usize, 2048, 512, 0] {
+            mmap_clear_last_os_error();
+            assert!(
+                HugePageBacked::with_huge_page_size(1 << 21, bad).is_err(),
+                "hp_size={bad} should be rejected",
+            );
+            assert!(
+                mmap_last_os_error().is_some(),
+                "synthetic EINVAL must be captured for hp_size={bad}",
+            );
+        }
     }
 
     /// Apple Silicon path: every request errors with synthetic EINVAL.
@@ -554,6 +581,40 @@ mod tests {
     #[test]
     fn macos_x86_64_superpage_flag_constant_matches_xnu() {
         assert_eq!(libc::VM_FLAGS_SUPERPAGE_SIZE_ANY, 1 << 16);
+    }
+
+    /// Regression: the bit-pattern produced by `encode_huge_size_linux`
+    /// for `hp_size = 2 MiB` and `1 GiB` must equal `libc::MAP_HUGE_2MB`
+    /// and `MAP_HUGE_1GB` respectively. Catches:
+    ///   - off-by-one in the shift,
+    ///   - signed-vs-unsigned shift overflow (an earlier rev did
+    ///     `(hp_log2 as i32) << 26` which panics in debug for
+    ///     `hp_size >= 4 GiB`),
+    ///   - any future libc rev that renumbers `MAP_HUGE_SHIFT`.
+    /// Runs on every Linux target; no kernel huge-page reservation
+    /// needed.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_huge_size_encoding_matches_libc_constants() {
+        assert_eq!(
+            encode_huge_size_linux(2 * 1024 * 1024),
+            libc::MAP_HUGE_2MB,
+            "2 MiB encoding mismatch",
+        );
+        assert_eq!(
+            encode_huge_size_linux(1024 * 1024 * 1024),
+            libc::MAP_HUGE_1GB,
+            "1 GiB encoding mismatch",
+        );
+        // 16 GiB: `34 << 26` overflows i32 if you do the shift in
+        // signed arithmetic. The helper does it in u32 so this
+        // must succeed.
+        let sixteen_gib = 16_usize * 1024 * 1024 * 1024;
+        let encoded = encode_huge_size_linux(sixteen_gib);
+        // Compare against the libc constant when present; libc gates
+        // MAP_HUGE_16GB on the same targets that expose MAP_HUGE_SHIFT,
+        // so this should always be available.
+        assert_eq!(encoded, libc::MAP_HUGE_16GB, "16 GiB encoding mismatch");
     }
 
     /// Probe whether the platform can actually allocate huge pages

@@ -267,9 +267,13 @@ pub fn assert_combined_invariants<A: Allocator + FixedRange>(a: &A) {
     // Inverse: a pointer far outside the range must NOT report as
     // contained. We construct it via integer arithmetic and
     // `NonNull::new` rather than `.add()` (which has in-bounds
-    // preconditions). 1 TiB past base is far enough outside any
-    // realistic range that it can't accidentally be in-range.
-    let outside_addr = (a.base().as_ptr() as usize).wrapping_add(1 << 40);
+    // preconditions). Half the address space past base is far
+    // enough outside any realistic range that it can't accidentally
+    // be in-range. We use `usize::MAX / 2` (computed in `usize`)
+    // rather than a literal like `1 << 40`: the literal would
+    // overflow inferred-as-`usize` on 32-bit targets (wasm32,
+    // i686), which `forge-alloc-core` supports.
+    let outside_addr = (a.base().as_ptr() as usize).wrapping_add(usize::MAX / 2);
     if let Some(outside) = NonNull::new(outside_addr as *mut u8) {
         assert!(
             !a.contains(outside),

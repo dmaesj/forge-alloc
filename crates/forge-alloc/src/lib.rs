@@ -8,11 +8,16 @@
 //! `forge-alloc` bundles the three implementation layers as modules:
 //!
 //! - **backing** — Layer 1: raw memory sources — [`InlineBacked`],
-//!   [`MmapBacked`], [`System`].
+//!   [`StaticBacked`], [`HeapBytes`], [`MmapBacked`], [`HugePageBacked`],
+//!   [`System`].
 //! - **layout** — Layer 2: structure over a backing — [`BumpArena`], [`Slab`],
 //!   [`SizeClassed`], [`StackAlloc`], [`WithFallback`], and more.
 //! - **hardening** — Layer 3: security & observability wrappers — [`Canary`],
 //!   [`PoisonOnFree`], [`Quarantine`], [`GuardPage`], [`Statistics`], and more.
+//!
+//! Conformance helpers for downstream `Allocator` / `FixedRange`
+//! implementers live in [`testing`] (re-exported from
+//! [`forge-alloc-core`]).
 //!
 //! The trait contracts ([`Allocator`], [`Deallocator`], [`OsBacked`],
 //! [`FixedRange`], [`FreelistProtection`], [`NonZeroLayout`], and the rest)
@@ -53,6 +58,9 @@ mod hardening;
 mod layout;
 
 pub use forge_alloc_core::*;
+
+#[doc(inline)]
+pub use forge_alloc_core::testing;
 
 #[doc(inline)]
 pub use backing::{HeapBytes, InlineBacked, StaticBacked, MAX_ALIGN};

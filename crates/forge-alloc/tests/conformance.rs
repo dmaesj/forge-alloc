@@ -5,7 +5,8 @@
 //! impl is confirmed contract-compliant.
 
 use forge_alloc::{
-    BumpArena, HeapBytes, InlineBacked, MmapBacked, NonZeroLayout, StaticBacked, System,
+    BumpArena, HeapBytes, HugePageBacked, InlineBacked, MmapBacked, NonZeroLayout, StaticBacked,
+    System,
 };
 use forge_alloc_core::testing::{
     assert_allocator_basic_round_trip, assert_allocator_respects_alignment,
@@ -55,6 +56,21 @@ fn mmap_backed_meets_contract() {
     assert_combined_invariants(&m);
     let m = MmapBacked::new(16 * 1024).unwrap();
     assert_allocator_respects_alignment(&m);
+}
+
+/// `HugePageBacked` exercise gated on platform support: when the
+/// kernel can't satisfy a 2 MiB huge-page request (CI runners with
+/// no `nr_hugepages` reservation, Apple Silicon, Android, etc.),
+/// silently skip. When it can, validate the same contract every
+/// other backing meets.
+#[test]
+fn huge_page_backed_meets_contract_when_supported() {
+    if let Ok(h) = HugePageBacked::new(2 * 1024 * 1024) {
+        assert_combined_invariants(&h);
+    }
+    if let Ok(h) = HugePageBacked::new(2 * 1024 * 1024) {
+        assert_allocator_respects_alignment(&h);
+    }
 }
 
 #[test]
