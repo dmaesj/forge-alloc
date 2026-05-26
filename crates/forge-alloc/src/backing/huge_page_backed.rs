@@ -594,6 +594,7 @@ mod tests {
     ///     `(hp_log2 as i32) << 26` which panics in debug for
     ///     `hp_size >= 4 GiB`),
     ///   - any future libc rev that renumbers `MAP_HUGE_SHIFT`.
+    ///
     /// Runs on every Linux target; no kernel huge-page reservation
     /// needed.
     #[cfg(target_os = "linux")]
