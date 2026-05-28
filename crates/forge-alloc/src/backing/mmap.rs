@@ -544,7 +544,22 @@ pub fn page_size() -> usize {
 /// on 16 KiB-page platforms.
 #[cfg(windows)]
 pub fn page_size() -> usize {
+    use core::sync::atomic::{AtomicUsize, Ordering};
     use windows_sys::Win32::System::SystemInformation::{GetSystemInfo, SYSTEM_INFO};
+
+    // The OS page size is a runtime constant, but `GetSystemInfo` is a real
+    // syscall-like call. `os_commit` consults `page_size()` on every
+    // demand-commit, which is per-allocation on the hot path, so cache the
+    // first result. `0` is the "not yet computed" sentinel (a real page size
+    // is always > 0). The race is benign: concurrent first callers each run
+    // `GetSystemInfo` and store the *same* value, so any interleaving leaves
+    // the cache holding the correct page size. `Relaxed` is sufficient — the
+    // stored value is a plain integer with no other state ordered against it.
+    static CACHED: AtomicUsize = AtomicUsize::new(0);
+    let cached = CACHED.load(Ordering::Relaxed);
+    if cached != 0 {
+        return cached;
+    }
     // SAFETY: GetSystemInfo writes a fully-initialized SYSTEM_INFO into its
     // out-pointer; we provide a stack slot of the correct size.
     let mut info: SYSTEM_INFO = unsafe { core::mem::zeroed() };
@@ -553,11 +568,9 @@ pub fn page_size() -> usize {
     // editions; the explicit fallback is purely defensive so a degenerate
     // value can never trigger `page - 1` underflow in `with_flags`.
     let p = info.dwPageSize as usize;
-    if p > 0 {
-        p
-    } else {
-        4096
-    }
+    let ps = if p > 0 { p } else { 4096 };
+    CACHED.store(ps, Ordering::Relaxed);
+    ps
 }
 
 #[cfg(unix)]
