@@ -1,6 +1,6 @@
 [package]
 name        = "forge-alloc"
-version     = "0.3.1"
+version     = "0.3.2"
 description = "Composable memory allocator primitives — pay-for-what-you-use security hardening with zero-cost type-level composition"
 edition.workspace      = true
 rust-version.workspace = true
@@ -25,7 +25,7 @@ mte       = []
 mpk       = []
 
 [dependencies]
-forge-alloc-core = { version = "0.2.1", path = "../forge-alloc-core", default-features = false }
+forge-alloc-core = { version = "0.2.2", path = "../forge-alloc-core", default-features = false }
 allocator-api2   = { version = "0.2", default-features = false, features = ["alloc"] }
 # Constant-time compare for canary / MAC verification.
 subtle           = { version = "2.5", default-features = false }

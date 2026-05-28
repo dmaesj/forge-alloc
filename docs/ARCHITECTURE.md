@@ -97,7 +97,7 @@ allocator. This eliminates a recurring class of "what does
 ### `FixedRange`
 
 A marker trait for allocators whose entire address range is fixed at
-construction. Implementing `FixedRange` enables two things:
+construction. Implementing `FixedRange` enables three things:
 
 - **Provenance-based routing** in `WithFallback<P, S>`. The router's
   `deallocate(ptr)` checks `primary.contains(ptr)` and dispatches
@@ -105,6 +105,13 @@ construction. Implementing `FixedRange` enables two things:
 - **Watermark threshold computation**. A `Watermark<I, H>` over a
   `FixedRange` allocator knows the capacity (the address range size)
   and can compute "fraction used" without asking the inner.
+- **Just-in-time commit** via `commit(offset, len)` (default no-op). A
+  cursor-advancing consumer (`BumpArena`, `StackAlloc`) calls it as it
+  crosses into new pages, letting a backing that *reserves* address
+  space without committing it — a `lazy_commit` `MmapBacked` on Windows
+  — commit on demand instead of charging its whole reservation up front.
+  Pass-through wrappers forward it; the failure path propagates as
+  `AllocError` rather than a fault on first write.
 
 ### `OsBacked`
 

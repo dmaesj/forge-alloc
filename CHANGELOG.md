@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-05-28 (includes forge-alloc-core 0.2.2)
+
+Additive release: opt-in Windows demand-commit for `MmapBacked`. No
+breaking changes.
+
+### Added — `forge-alloc`
+- `MmapFlags::lazy_commit` and `MmapBacked::new_lazy(size)`: reserve a
+  Windows region (`VirtualAlloc(MEM_RESERVE)`) without charging the
+  system commit limit up front, committing pages on demand as a
+  `BumpArena` / `StackAlloc` cursor advances. This avoids the
+  full-reservation commit charge for a large, mostly-untouched arena —
+  Windows does not overcommit, so the previous eager
+  `MEM_RESERVE | MEM_COMMIT` charged the entire region even if only a
+  fraction was ever written. Inert on Unix (`mmap` is already
+  demand-paged), where `commit` is a no-op.
+- Commit is fallible and runs before a consumer publishes its cursor, so
+  a declined reservation surfaces as `AllocError` rather than a hard
+  access violation on first write.
+- The pass-through `FixedRange` wrappers (`Statistics`, `PoisonOnFree`,
+  `Quarantine`, `Watermark`, `Canary`, `CacheJitter`, `Faulty`,
+  `HugePageAligned`, `NumaLocal`, `SplitMetadata`) forward `commit`, so a
+  lazy mapping stays correct when wrapped. `Slab` / `SizeClassed` /
+  direct `Allocator::allocate` commit the block at allocation time
+  (safe, but eager). `SharedBumpArena` and `GuardPage` remain unsupported
+  over a lazy mapping and are documented as such.
+
+### Added — `forge-alloc-core` 0.2.2
+- `FixedRange::commit(offset, len) -> Result<(), AllocError>`: a
+  default-no-op hook that lets a cursor-advancing consumer commit a
+  backing's pages just in time. Backwards-compatible — existing
+  `FixedRange` implementations inherit the no-op.
+
 ## [0.3.1] - 2026-05-25 (includes forge-alloc-core 0.2.1)
 
 Additive release: three new backing primitives, a calloc variant on
