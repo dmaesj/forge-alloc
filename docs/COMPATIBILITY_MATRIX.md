@@ -179,6 +179,14 @@ point — they degrade quietly. Each entry says what the quiet degradation is.
 - **Gating**: feature-flagged behind `pac-stub`, and the type is `#[deprecated]` so accidental use surfaces as a build warning.
 - **Instead**: until M11, use `SipHashMAC` (`siphasher` feature) for keyed freelist authentication on aarch64.
 
+### 21. `lazy_commit` `MmapBacked` under `SharedBumpArena` or `GuardPage`
+
+- **Status**: FG — faults at first write (Windows only)
+- **What works**: `BumpArena` / `StackAlloc` directly over a `lazy_commit` `MmapBacked` (`MmapBacked::new_lazy`), plus any pass-through `FixedRange` wrapper interposed between them (`Statistics`, `PoisonOnFree`, `Quarantine`, `Watermark`, `Canary`, `CacheJitter`, `Faulty`, `HugePageAligned`, `NumaLocal`, `SplitMetadata`) — these forward `FixedRange::commit`. `Slab` / `SizeClassed` / direct `Allocator::allocate` are also safe: they commit the block at allocation time (eager — no demand-paging benefit, but no fault).
+- **What faults**: a lazy mapping reserves Windows pages without committing them, and writing one before `commit` raises an access violation. `SharedBumpArena` is `Sync` and cannot drive the `!Sync` commit watermark, so it deliberately does not call `commit`. `GuardPage` offsets its usable range past a guard page and its inner bound is only `OsBacked` (no `commit` to forward). Both leave the pages uncommitted, so the first write crashes.
+- **Severity**: LOW — opt-in and Windows-only; the contract is spelled out on `MmapFlags::lazy_commit`. Inert on Unix (`mmap` is already demand-paged, so `commit` is a no-op and the flag changes nothing).
+- **Instead**: use `MmapBacked::new` (eager commit) under `SharedBumpArena` / `GuardPage`, or keep the `lazy_commit` mapping directly under `BumpArena` / `StackAlloc`.
+
 ---
 
 ## Deferred to v2.0
@@ -187,25 +195,25 @@ These are known restrictions where today's enforcement is weaker than it
 should be. Each requires an API-breaking change to enforce properly,
 which we won't do mid-v0.1.
 
-### 21. `SizeClassed<B, _>` backing-alignment as a compile-time check
+### 22. `SizeClassed<B, _>` backing-alignment as a compile-time check
 
 - **Today**: runtime construction error (item 10).
 - **V2**: a `MAX_ALIGN` associated const on the `FixedRange` trait would let `SizeClassed` `const_assert!(B::MAX_ALIGN >= max(class_strides))` at monomorphisation, turning the runtime error into a compile error.
 - **Why deferred**: adds a required associated const to a public trait — API-breaking for any external `FixedRange` impl.
 
-### 22. `GenerationalSlab` handle branding
+### 23. `GenerationalSlab` handle branding
 
 - **Today**: cross-pool handle confusion is a runtime hazard (item 19).
 - **V2**: `Handle<'pool, T, G>` carrying an invariant lifetime from its issuing pool (the `generativity` crate's pattern) would make cross-pool use a compile error. The `Handle: Copy` ergonomics would survive.
 - **Why deferred**: every `Handle<T, G>` consumer signature gains a lifetime parameter — API-breaking.
 
-### 23. `FixedRange::base()` / `size()` concurrent-call guarantee
+### 24. `FixedRange::base()` / `size()` concurrent-call guarantee
 
 - **Today**: implicit clause in the trait docs (item 14's footgun depends on this).
 - **V2**: make the clause explicit via either (a) requiring `Self: Sync` to widen `SharedBumpArena: Sync`, or (b) a marker super-trait like `FixedRange + ConcurrentReadFixedRange`.
 - **Why deferred**: option (a) breaks the documented `SharedBumpArena<InlineBacked>` recipe; option (b) adds a trait split. Both are API-breaking.
 
-### 24. Bare-metal targets without native 64-bit atomics — RESOLVED in v0.1
+### 25. Bare-metal targets without native 64-bit atomics — RESOLVED in v0.1
 
 - **Today**: all observability counters in `forge-alloc`'s `layout`
   module (`Slab::corruption_events`, `ExtendableSlab::routing_failures`,
@@ -234,7 +242,7 @@ which we won't do mid-v0.1.
   struct retains `#[non_exhaustive]` and the helper methods retain
   their `u64`/`i64` return types.
 
-### 25. `AllocStats` field additions
+### 26. `AllocStats` field additions
 
 - **Today**: `#[non_exhaustive]` — additional observability counters can be added without breaking, but no enforcement mechanism for *which* fields a downstream `Statistics`-wrapper-equivalent must provide.
 - **V2**: extracting `AllocStats` into a trait would let third-party wrappers conform. Today's monolith ships fine but isn't extensible from outside the crate.
@@ -266,11 +274,12 @@ which we won't do mid-v0.1.
 | 18 | `HugePageAligned` without kernel huge pages | Runtime (best-effort) | FG (degraded) |
 | 19 | `GenerationalSlab` cross-pool handle | Runtime (silent wrong value) | FG → V2 |
 | 20 | `PacMAC` in production | Runtime panic | FG |
-| 21 | `SizeClassed` backing alignment | V2 |
-| 22 | `GenerationalSlab` handle branding | V2 |
-| 23 | `FixedRange` concurrent-call guarantee | V2 |
-| 24 | Bare-metal targets without 64-bit atomics | V2 |
-| 25 | `AllocStats` extension trait | V2 |
+| 21 | `lazy_commit` MmapBacked under `SharedBumpArena` / `GuardPage` | Runtime (fault on write, Windows) | FG (soundness) |
+| 22 | `SizeClassed` backing alignment | V2 |
+| 23 | `GenerationalSlab` handle branding | V2 |
+| 24 | `FixedRange` concurrent-call guarantee | V2 |
+| 25 | Bare-metal targets without 64-bit atomics | V2 |
+| 26 | `AllocStats` extension trait | V2 |
 
 ---
 
