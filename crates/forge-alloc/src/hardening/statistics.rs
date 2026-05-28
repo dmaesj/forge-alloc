@@ -414,6 +414,13 @@ impl<I: FixedRange> FixedRange for Statistics<I> {
     fn size(&self) -> usize {
         self.inner.size()
     }
+
+    /// Pass-through forward so a `commit`-aware consumer reaches the inner
+    /// backing when this wrapper sits over a `lazy_commit` `MmapBacked`.
+    #[inline]
+    fn commit(&self, offset: usize, len: usize) -> Result<(), AllocError> {
+        self.inner.commit(offset, len)
+    }
 }
 
 #[cfg(test)]

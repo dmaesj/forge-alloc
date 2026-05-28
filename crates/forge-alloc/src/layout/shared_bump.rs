@@ -143,6 +143,15 @@ unsafe impl<B: FixedRange> Allocator for SharedBumpArena<B> {
             if end_off > self.capacity {
                 return Err(AllocError);
             }
+            // NOTE: deliberately no `backing.commit()` here, unlike
+            // `BumpArena`/`StackAlloc`. `SharedBumpArena` is `Sync` and
+            // allocates concurrently, but `MmapBacked`'s commit watermark is
+            // a plain `!Sync` `UnsafeCell` — committing from multiple threads
+            // would race it. A `lazy_commit` `MmapBacked` is therefore
+            // UNSUPPORTED under `SharedBumpArena` and faults on first write
+            // (see `MmapFlags::lazy_commit`). Supporting it needs an atomic
+            // watermark; revisit only if a lazy *shared* arena is needed.
+            //
             // The CAS publishes only an integer offset. The bytes
             // [base+aligned_off, base+end_off) are owned exclusively by the
             // winning thread; another thread that subsequently reads those

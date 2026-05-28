@@ -150,9 +150,24 @@ pub struct MmapFlags {
     ///   equivalent that operates at `mmap` time; eager paging on Darwin
     ///   requires `madvise(MADV_WILLNEED)` over the region after mapping,
     ///   which `MmapBacked` does not currently perform.
-    /// - **Windows**: **silently ignored**. `VirtualAlloc` already
-    ///   commits the range at allocation time, so the page-fault
-    ///   latency the flag is meant to amortize is much smaller.
+    /// - **Windows**: **silently ignored** — but *not* because eager
+    ///   paging already happened. `VirtualAlloc(MEM_RESERVE|MEM_COMMIT)`
+    ///   charges the full region against the system commit limit at
+    ///   construction, yet does **not** make pages resident: the working
+    ///   set is still populated lazily by demand-zero faults on first
+    ///   access, exactly as on Unix. So the per-page fault latency this
+    ///   flag targets is unchanged on Windows; there is nothing for it to
+    ///   populate eagerly. The real Windows-specific divergence is a cost,
+    ///   not a benefit: because Windows does not overcommit, that commit
+    ///   charge is reserved whether or not the pages are ever touched, so a
+    ///   large `MmapBacked` whose consumer writes only a fraction of it
+    ///   (e.g. a bump arena sized for headroom) still consumes its full
+    ///   size of commit budget — and the mapping fails at construction once
+    ///   the cumulative charge exceeds the limit, even with physical RAM
+    ///   free. Opt out of the up-front charge with [`lazy_commit`](Self::lazy_commit)
+    ///   (reserve-only + incremental `MEM_COMMIT` driven by
+    ///   [`FixedRange::commit`] as a [`BumpArena`](crate::BumpArena) cursor
+    ///   advances).
     ///
     /// Use [`Self::populate_supported`] to test at runtime whether
     /// setting this flag will have any effect, or branch on `cfg!` in
@@ -164,6 +179,45 @@ pub struct MmapFlags {
     /// Append one unmapped guard page after the region. Implemented via
     /// `GuardPage`; ignored at this layer.
     pub guard_at_end: bool,
+    /// Reserve the address range without committing it up front, leaving
+    /// per-page commit to [`FixedRange::commit`] as a consumer's cursor
+    /// advances.
+    ///
+    /// **Windows-only effect.** On Windows, `VirtualAlloc(MEM_RESERVE)`
+    /// reserves address space without charging the system commit limit;
+    /// pages are committed lazily via `commit`. On Unix this flag is
+    /// inert — `mmap(MAP_ANONYMOUS|MAP_PRIVATE)` is already demand-paged,
+    /// so the region is created exactly as without the flag and `commit`
+    /// is a no-op.
+    ///
+    /// # Safety / usage contract
+    ///
+    /// A `lazy_commit` mapping hands back **reserved-but-uncommitted**
+    /// pages on Windows; writing one before [`FixedRange::commit`] has
+    /// committed it faults (access violation). Supported consumers commit
+    /// before any write reaches the page:
+    ///
+    /// - [`BumpArena`] / [`StackAlloc`](crate::StackAlloc) commit each block
+    ///   as the cursor advances — true demand-commit, the intended use.
+    /// - A pass-through `FixedRange` wrapper interposed between the arena and
+    ///   the mapping (`Statistics`, `PoisonOnFree`, `Quarantine`,
+    ///   `Watermark`, `Canary`, `CacheJitter`, `Faulty`, `HugePageAligned`,
+    ///   `NumaLocal`, `SplitMetadata`) forwards `commit`, so it stays safe.
+    /// - `Slab`, `SizeClassed`, and direct [`Allocator::allocate`] carve via
+    ///   `allocate`, which commits the block up front — safe, but commits
+    ///   *eagerly* (no demand-paging benefit on this path).
+    ///
+    /// Two consumers still fault and are **unsupported** over a lazy mapping
+    /// — use [`MmapBacked::new`] (eager) for them:
+    ///
+    /// - `SharedBumpArena` — it is `Sync` and would race the `!Sync` commit
+    ///   watermark, so it deliberately does not call `commit`.
+    /// - `GuardPage` — its usable range starts past a guard page and its
+    ///   inner bound is only `OsBacked`, so it has no `commit` to forward.
+    ///
+    /// [`BumpArena`]: crate::BumpArena
+    /// [`FixedRange::commit`]: forge_alloc_core::FixedRange::commit
+    pub lazy_commit: bool,
 }
 
 impl MmapFlags {
@@ -173,6 +227,7 @@ impl MmapFlags {
         populate: false,
         numa_node: None,
         guard_at_end: false,
+        lazy_commit: false,
     };
 
     /// Returns `true` if `populate: true` will actually be honored on the
@@ -210,6 +265,19 @@ pub struct MmapBacked {
     ptr: NonNull<u8>,
     len: usize,
     cursor: UnsafeCell<usize>,
+    /// Page-aligned high-water mark of committed bytes from `ptr`, in
+    /// `[0, len]`. Everything in `[ptr, ptr + committed)` is committed and
+    /// writable. Only consulted on Windows: eager mappings initialise it
+    /// to `len` (whole region committed at construction) so `commit` is a
+    /// cheap watermark hit; `lazy_commit` mappings start at `0` and grow it
+    /// one `VirtualAlloc(MEM_COMMIT)` per page-crossing as [`commit`] runs.
+    /// `UnsafeCell` (not atomic) because `MmapBacked` is `!Sync` — the
+    /// commit-aware single-writer consumers ([`BumpArena`] / `StackAlloc`,
+    /// and `MmapBacked::allocate` itself) hold exclusive access.
+    ///
+    /// [`commit`]: forge_alloc_core::FixedRange::commit
+    /// [`BumpArena`]: crate::BumpArena
+    committed: UnsafeCell<usize>,
 }
 
 impl MmapBacked {
@@ -226,6 +294,36 @@ impl MmapBacked {
             size,
             MmapFlags {
                 huge_pages: true,
+                ..MmapFlags::NONE
+            },
+        )
+    }
+
+    /// Reserve an anonymous OS-mapped region of at least `size` bytes
+    /// without committing it up front (see [`MmapFlags::lazy_commit`]).
+    ///
+    /// **Windows-only effect.** On Windows the region is `MEM_RESERVE`-only
+    /// and consumes no commit charge until [`FixedRange::commit`] commits
+    /// pages on demand; on Unix this is identical to [`new`](Self::new)
+    /// because `mmap` is already demand-paged.
+    ///
+    /// # Safety / usage contract
+    ///
+    /// The returned region hands back reserved-but-uncommitted pages on
+    /// Windows. It is safe under [`BumpArena`] / [`StackAlloc`](crate::StackAlloc)
+    /// (true demand-commit), under any pass-through `FixedRange` wrapper over
+    /// those, and under `Slab` / `SizeClassed` / direct
+    /// [`Allocator::allocate`] (safe, but committed eagerly). It faults under
+    /// `SharedBumpArena` and `GuardPage`. See [`MmapFlags::lazy_commit`] for
+    /// the full contract.
+    ///
+    /// [`FixedRange::commit`]: forge_alloc_core::FixedRange::commit
+    /// [`BumpArena`]: crate::BumpArena
+    pub fn new_lazy(size: usize) -> Result<Self, AllocError> {
+        Self::with_flags(
+            size,
+            MmapFlags {
+                lazy_commit: true,
                 ..MmapFlags::NONE
             },
         )
@@ -252,10 +350,21 @@ impl MmapBacked {
         // SAFETY: platform-specific os_map enforces its own invariants and
         // returns a non-null pointer to `len` writable bytes on success.
         let ptr = unsafe { os_map(len, &flags)? };
+        // Eager mappings have the whole region committed at construction, so
+        // the watermark starts at `len` and `commit` always hits it. Lazy
+        // mappings (Windows MEM_RESERVE) start uncommitted at `0`. On Unix
+        // the watermark is never consulted (mmap is demand-paged; `commit`
+        // is a no-op), so `len` is a harmless default there regardless.
+        let committed = if cfg!(windows) && flags.lazy_commit {
+            0
+        } else {
+            len
+        };
         Ok(Self {
             ptr,
             len,
             cursor: UnsafeCell::new(0),
+            committed: UnsafeCell::new(committed),
         })
     }
 
@@ -315,6 +424,17 @@ unsafe impl Allocator for MmapBacked {
             if end_off > self.len {
                 return Err(AllocError);
             }
+            // Commit the block before handing it out, so consumers that
+            // carve a region via `allocate` and then write it by raw offset
+            // (`Slab`, `SizeClassed`, direct callers) are safe on a
+            // `lazy_commit` mapping instead of faulting — they degrade to
+            // commit-at-allocate (effectively eager) rather than demand-
+            // paged. No-op for an eager mapping (watermark starts at `len`).
+            // Commit before publishing the cursor so a declined commit
+            // leaves the backing unchanged. `BumpArena` bypasses this path
+            // (it writes via `base()+offset` and drives `commit` itself), so
+            // there is no double-commit.
+            os_commit(self.ptr, self.len, &self.committed, aligned_off, size)?;
             *cursor_ptr = end_off;
             let p = self.ptr.as_ptr().add(aligned_off);
             // SAFETY: aligned_off <= len, and p derives from self.ptr which
@@ -341,6 +461,18 @@ impl FixedRange for MmapBacked {
     #[inline]
     fn size(&self) -> usize {
         self.len
+    }
+
+    #[inline]
+    fn commit(&self, offset: usize, len: usize) -> Result<(), AllocError> {
+        // SAFETY: !Sync — the single commit-aware consumer (BumpArena) has
+        // exclusive access to the `committed` watermark; no concurrent
+        // commit can race the UnsafeCell. This relies on the invariant that
+        // only the owning BumpArena calls `commit` (and `&self` allocators
+        // can't run concurrently on a `!Sync` type). Calling `commit`
+        // directly on a shared `&MmapBacked` while an allocator advances the
+        // watermark would violate that and race the cell — don't.
+        unsafe { os_commit(self.ptr, self.len, &self.committed, offset, len) }
     }
 }
 
@@ -463,25 +595,106 @@ unsafe fn os_map(len: usize, flags: &MmapFlags) -> Result<NonNull<u8>, AllocErro
 }
 
 #[cfg(windows)]
-unsafe fn os_map(len: usize, _flags: &MmapFlags) -> Result<NonNull<u8>, AllocError> {
+unsafe fn os_map(len: usize, flags: &MmapFlags) -> Result<NonNull<u8>, AllocError> {
     use windows_sys::Win32::System::Memory::{
         VirtualAlloc, MEM_COMMIT, MEM_RESERVE, PAGE_READWRITE,
     };
-    // SAFETY: VirtualAlloc with NULL base and MEM_RESERVE|MEM_COMMIT is the
-    // standard anonymous-mapping pattern. Returns NULL on error.
-    let p = unsafe {
-        VirtualAlloc(
-            core::ptr::null_mut(),
-            len,
-            MEM_RESERVE | MEM_COMMIT,
-            PAGE_READWRITE,
-        )
+    // Eager (default): MEM_RESERVE|MEM_COMMIT charges `len` against the
+    // system commit limit up front (Windows does not overcommit), unlike
+    // the demand-paged Unix mmap above. `lazy_commit` reserves address
+    // space only (MEM_RESERVE) — no commit charge — and leaves per-page
+    // commit to `FixedRange::commit` as a BumpArena cursor advances. The
+    // reservation passes PAGE_READWRITE, but for a MEM_RESERVE-only range
+    // the protection is inert until commit; the later MEM_COMMIT supplies
+    // the real PAGE_READWRITE. Reserved-but-uncommitted pages fault on
+    // access regardless, which is the intended trap until `commit` runs.
+    let alloc_type = if flags.lazy_commit {
+        MEM_RESERVE
+    } else {
+        MEM_RESERVE | MEM_COMMIT
     };
+    // SAFETY: VirtualAlloc with NULL base and a valid MEM_* type + PAGE_*
+    // protection is the standard anonymous-mapping pattern. Returns NULL on
+    // error.
+    let p = unsafe { VirtualAlloc(core::ptr::null_mut(), len, alloc_type, PAGE_READWRITE) };
     let nn = NonNull::new(p as *mut u8);
     if nn.is_none() {
         capture_os_error();
     }
     nn.ok_or(AllocError)
+}
+
+#[cfg(unix)]
+unsafe fn os_commit(
+    _base: NonNull<u8>,
+    _region_len: usize,
+    _committed: &UnsafeCell<usize>,
+    _offset: usize,
+    _len: usize,
+) -> Result<(), AllocError> {
+    // mmap(MAP_ANONYMOUS|MAP_PRIVATE) is demand-paged: pages are committed
+    // (and commit-charged, under the kernel's overcommit policy) lazily on
+    // first touch with no per-page action required here. The watermark is
+    // never consulted on Unix, so `lazy_commit` is inert.
+    Ok(())
+}
+
+#[cfg(windows)]
+unsafe fn os_commit(
+    base: NonNull<u8>,
+    region_len: usize,
+    committed: &UnsafeCell<usize>,
+    offset: usize,
+    len: usize,
+) -> Result<(), AllocError> {
+    use windows_sys::Win32::System::Memory::{VirtualAlloc, MEM_COMMIT, PAGE_READWRITE};
+    // Page-round the requested end up, then clamp to the region. The clamp
+    // is defensive: the caller (BumpArena) has already bounds-checked
+    // `offset + len <= region_len` and `region_len` is page-aligned, so a
+    // valid request never exceeds the region after rounding.
+    let end = offset.checked_add(len).ok_or(AllocError)?;
+    let page = page_size();
+    let end_paged = end
+        .checked_add(page - 1)
+        .map(|v| v & !(page - 1))
+        .ok_or(AllocError)?
+        .min(region_len);
+    let committed_ptr = committed.get();
+    // SAFETY: !Sync — exclusive access to the watermark.
+    let already = unsafe { *committed_ptr };
+    if end_paged <= already {
+        // Whole requested range already committed (the common path once the
+        // cursor has walked past these pages, and the *only* path for an
+        // eager mapping whose watermark starts at `region_len`).
+        return Ok(());
+    }
+    // SAFETY: `already <= region_len` (watermark invariant) so the offset is
+    // in-bounds of the reserved region.
+    let commit_base = unsafe { base.as_ptr().add(already) };
+    let commit_len = end_paged - already;
+    // SAFETY: [base + already, base + end_paged) lies within the reserved
+    // region; MEM_COMMIT on an already-reserved range is the documented
+    // demand-commit pattern and is idempotent on any sub-pages already
+    // committed.
+    let p = unsafe {
+        VirtualAlloc(
+            commit_base as *mut _,
+            commit_len,
+            MEM_COMMIT,
+            PAGE_READWRITE,
+        )
+    };
+    if p.is_null() {
+        // OS declined the commit (commit limit). Leave the watermark
+        // unchanged so the range stays officially uncommitted, and surface
+        // a clean allocation failure rather than letting the caller write
+        // into a page the OS never backed.
+        capture_os_error();
+        return Err(AllocError);
+    }
+    // SAFETY: !Sync — exclusive access to the watermark.
+    unsafe { *committed_ptr = end_paged };
+    Ok(())
 }
 
 #[cfg(unix)]
@@ -849,6 +1062,109 @@ mod tests {
             core::ptr::write_bytes(p.as_ptr(), 0xEE, page_size());
             m.release_pages(p, page_size());
             core::ptr::write_bytes(p.as_ptr(), 0x11, page_size());
+        }
+    }
+
+    #[test]
+    #[cfg_attr(miri, ignore = "miri can't shim mmap / VirtualAlloc")]
+    fn lazy_commit_then_write_round_trips() {
+        // `new_lazy` reserves on Windows (no commit charge) and is identical
+        // to `new` on Unix. After `commit`, the range must be writable on
+        // every platform.
+        let m = MmapBacked::new_lazy(64 * 1024).expect("lazy reserve should succeed");
+        let len = page_size();
+        m.commit(0, len)
+            .expect("commit of a reserved range should succeed");
+        let base = m.base().as_ptr();
+        unsafe {
+            core::ptr::write_bytes(base, 0xAB, len);
+            assert_eq!(*base, 0xAB);
+            assert_eq!(*base.add(len - 1), 0xAB);
+        }
+    }
+
+    #[test]
+    #[cfg_attr(miri, ignore = "miri can't shim mmap / VirtualAlloc")]
+    fn commit_is_idempotent_and_monotonic() {
+        let m = MmapBacked::new_lazy(64 * 1024).unwrap();
+        let page = page_size();
+        // Re-committing the same range and a sub-range is a no-op success.
+        m.commit(0, page).unwrap();
+        m.commit(0, page).unwrap();
+        m.commit(0, 1).unwrap();
+        // Extend the watermark forward by one page.
+        m.commit(page, page).unwrap();
+        // A range already below the watermark stays Ok without a syscall.
+        m.commit(0, 2 * page).unwrap();
+    }
+
+    #[test]
+    #[cfg_attr(miri, ignore = "miri can't shim mmap / VirtualAlloc")]
+    fn eager_mapping_commit_is_noop() {
+        // A default (eager) mapping has the whole region committed at
+        // construction; the watermark starts at `len`, so `commit` succeeds
+        // for any in-region range as a pure watermark hit.
+        let m = MmapBacked::new(16 * 1024).unwrap();
+        m.commit(0, 16 * 1024).unwrap();
+        m.commit(page_size(), page_size()).unwrap();
+    }
+
+    #[test]
+    #[cfg_attr(miri, ignore = "miri can't shim mmap / VirtualAlloc")]
+    fn bump_arena_over_lazy_mmap_commits_on_alloc() {
+        use crate::layout::BumpArena;
+        // BumpArena is the commit-aware consumer: each allocate commits the
+        // block before returning it, so writing through every returned
+        // pointer is sound even though the backing was only reserved.
+        let arena = BumpArena::new(MmapBacked::new_lazy(256 * 1024).unwrap()).unwrap();
+        let layout = NonZeroLayout::from_size_align(page_size(), 8).unwrap();
+        for _ in 0..16 {
+            let block = arena.allocate(layout).unwrap();
+            let p = block.cast::<u8>().as_ptr();
+            unsafe {
+                core::ptr::write_bytes(p, 0xCD, page_size());
+                assert_eq!(*p, 0xCD);
+                assert_eq!(*p.add(page_size() - 1), 0xCD);
+            }
+        }
+    }
+
+    #[test]
+    #[cfg_attr(miri, ignore = "miri can't shim mmap / VirtualAlloc")]
+    fn bump_over_passthrough_wrapper_over_lazy_mmap_commits() {
+        use crate::layout::BumpArena;
+        use crate::Statistics;
+        // A pass-through FixedRange wrapper (Statistics) interposed between
+        // BumpArena and a lazy mapping must forward `commit`, so writes are
+        // still committed and don't fault.
+        let arena =
+            BumpArena::new(Statistics::new(MmapBacked::new_lazy(256 * 1024).unwrap())).unwrap();
+        let layout = NonZeroLayout::from_size_align(page_size(), 8).unwrap();
+        for _ in 0..8 {
+            let block = arena.allocate(layout).unwrap();
+            let p = block.cast::<u8>().as_ptr();
+            unsafe {
+                core::ptr::write_bytes(p, 0x5A, page_size());
+                assert_eq!(*p.add(page_size() - 1), 0x5A);
+            }
+        }
+    }
+
+    #[test]
+    #[cfg_attr(miri, ignore = "miri can't shim mmap / VirtualAlloc")]
+    fn slab_over_lazy_mmap_commits_via_allocate() {
+        use crate::Slab;
+        // Slab carves its region via `backing.allocate()`, which commits the
+        // block up front on a lazy mapping (fix #2), so the slot writes that
+        // follow don't fault.
+        let s: Slab<u64, MmapBacked> =
+            Slab::new(1024, MmapBacked::new_lazy(1 << 20).unwrap()).unwrap();
+        let layout = NonZeroLayout::for_type::<u64>().unwrap();
+        let p = s.allocate(layout).unwrap();
+        unsafe {
+            p.cast::<u64>().as_ptr().write(0xDEAD_BEEF);
+            assert_eq!(p.cast::<u64>().as_ptr().read(), 0xDEAD_BEEF);
+            s.deallocate(p.cast(), layout);
         }
     }
 

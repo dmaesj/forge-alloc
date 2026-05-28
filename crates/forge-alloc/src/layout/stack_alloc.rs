@@ -155,6 +155,14 @@ unsafe impl<B: FixedRange> Allocator for StackAlloc<B> {
             if end_off > self.capacity {
                 return Err(AllocError);
             }
+            // Commit the block on the backing before recording the frame or
+            // advancing the cursor, so a declined commit (a `lazy_commit`
+            // MmapBacked on Windows) leaves the stack unchanged and surfaces
+            // as AllocError instead of a fault on first write. No-op for
+            // already-writable backings. StackAlloc is `!Sync` single-writer,
+            // so the plain-cell watermark in MmapBacked is sound here, same
+            // as BumpArena.
+            self.backing.commit(aligned_off, size)?;
             // Record the frame BEFORE advancing the cursor. `cur` is the
             // value to restore on this frame's deallocate (which gives back
             // the alignment-pad bytes between `cur` and `aligned_off`).

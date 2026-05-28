@@ -182,6 +182,15 @@ unsafe impl<B: FixedRange> Allocator for BumpArena<B> {
             if end_off > self.capacity() {
                 return Err(AllocError);
             }
+            // Ensure the backing has the block's pages committed before we
+            // hand them out. No-op for already-writable backings
+            // (InlineBacked, eager MmapBacked, Unix mmap); on a lazy_commit
+            // MmapBacked this commits the freshly-crossed pages and can fail
+            // if the OS declines (Windows commit limit). Commit BEFORE
+            // publishing the cursor so a failure leaves the arena unchanged
+            // and surfaces as a clean AllocError rather than a fault on
+            // first write.
+            self.backing.commit(aligned_off, size)?;
             *cursor_ptr = end_off;
             // SAFETY: aligned_off + size <= capacity, so the resulting ptr
             // lies within [base, end). base is non-null per FixedRange's

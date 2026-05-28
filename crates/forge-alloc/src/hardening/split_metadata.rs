@@ -157,6 +157,15 @@ impl<I: Allocator + FixedRange> FixedRange for SplitMetadata<I> {
     fn size(&self) -> usize {
         self.data_region.size()
     }
+
+    /// Forward to the data region. The metadata lives in a *separate* mmap,
+    /// so `base`/`size` already track `data_region` 1:1 — no offset
+    /// translation is needed, and a `commit`-aware consumer over a
+    /// `lazy_commit` data region reaches the right pages.
+    #[inline]
+    fn commit(&self, offset: usize, len: usize) -> Result<(), AllocError> {
+        self.data_region.commit(offset, len)
+    }
 }
 
 #[cfg(test)]

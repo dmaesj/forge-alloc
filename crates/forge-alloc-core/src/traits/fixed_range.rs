@@ -24,6 +24,8 @@
 
 use core::ptr::NonNull;
 
+use super::non_zero_layout::AllocError;
+
 /// Address range fixed at construction.
 ///
 /// Once constructed, [`base`](Self::base) and [`size`](Self::size) never
@@ -35,6 +37,35 @@ pub trait FixedRange {
 
     /// Length in bytes of the owned address range.
     fn size(&self) -> usize;
+
+    /// Ensure the bytes `[offset, offset + len)` (relative to
+    /// [`base`](Self::base)) are backed by committed, writable memory
+    /// before a consumer writes through them.
+    ///
+    /// The default is a no-op returning `Ok(())`: most backings hand back
+    /// memory that is already writable (`InlineBacked`'s inline array, a
+    /// `mmap`'d region under Unix demand-paging, an eagerly-committed
+    /// `VirtualAlloc`). The hook exists for backings that *reserve* address
+    /// space without committing it — currently only a `lazy_commit`
+    /// [`MmapBacked`](../../forge_alloc/backing/struct.MmapBacked.html) on
+    /// Windows — where a write to an uncommitted page would fault. A
+    /// cursor-advancing consumer (e.g. `BumpArena`) calls this as its
+    /// cursor crosses into new pages, and propagates the `Err` as an
+    /// allocation failure rather than letting the OS decline a reservation
+    /// turn into a hard access violation.
+    ///
+    /// # Contract
+    ///
+    /// - `[offset, offset + len)` must lie within `[0, size())`.
+    /// - On `Err(AllocError)` the caller must treat the region as *not*
+    ///   committed and must not write through `[offset, offset + len)`.
+    /// - Idempotent and monotonic: committing a range that is already
+    ///   committed succeeds without side effects.
+    #[inline]
+    fn commit(&self, offset: usize, len: usize) -> Result<(), AllocError> {
+        let _ = (offset, len);
+        Ok(())
+    }
 
     /// Whether `ptr` lies within `[base, base + size)`.
     ///

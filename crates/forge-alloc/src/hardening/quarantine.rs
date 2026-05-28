@@ -208,6 +208,13 @@ impl<I: Allocator + FixedRange, const EPOCHS: usize> FixedRange for Quarantine<I
     fn size(&self) -> usize {
         self.inner.size()
     }
+
+    /// Pass-through forward so a `commit`-aware consumer reaches the inner
+    /// backing when this wrapper sits over a `lazy_commit` `MmapBacked`.
+    #[inline]
+    fn commit(&self, offset: usize, len: usize) -> Result<(), AllocError> {
+        self.inner.commit(offset, len)
+    }
 }
 
 impl<I: Allocator, const EPOCHS: usize> Drop for Quarantine<I, EPOCHS> {
