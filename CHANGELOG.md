@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.3] - 2026-05-28
+
+Internal performance fix. No API or behavior changes; `forge-alloc-core`
+is unchanged and stays at 0.2.2.
+
+### Changed — `forge-alloc`
+- `backing::mmap::page_size()` now caches its result in an `AtomicUsize`.
+  On Windows the demand-commit path (`MmapBacked` lazy commit) consulted
+  `GetSystemInfo` on every commit; it is now fetched once, removing a
+  per-commit syscall from the hot path. The Unix `sysconf` path is cached
+  the same way for symmetry.
+
 ## [0.3.2] - 2026-05-28 (includes forge-alloc-core 0.2.2)
 
 Additive release: opt-in Windows demand-commit for `MmapBacked`. No
