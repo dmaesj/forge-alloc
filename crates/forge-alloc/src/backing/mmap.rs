@@ -521,6 +521,18 @@ unsafe impl Send for MmapBacked {}
 /// on 16 KiB-page platforms.
 #[cfg(unix)]
 pub fn page_size() -> usize {
+    use core::sync::atomic::{AtomicUsize, Ordering};
+
+    // Cached for symmetry with the Windows path. `sysconf` is typically cheap
+    // on glibc/musl (resolved from the auxv at startup), but the cache makes
+    // the cost unconditionally a single relaxed load after the first call.
+    // `0` is the "not yet computed" sentinel (a real page size is always > 0);
+    // the race is benign because every first caller computes the same value.
+    static CACHED: AtomicUsize = AtomicUsize::new(0);
+    let cached = CACHED.load(Ordering::Relaxed);
+    if cached != 0 {
+        return cached;
+    }
     // SAFETY: sysconf is async-signal-safe and always returns >= 0 for
     // _SC_PAGESIZE on conforming Unix; we still fall back defensively when
     // the call reports -1 (errno) so `with_flags` cannot hit `page - 1`
@@ -531,11 +543,9 @@ pub fn page_size() -> usize {
     // of 16K, then mmap would still align internally to 16K. The behavioral
     // consequence is over-reservation at the round-up step, not unsoundness.
     let p = unsafe { libc::sysconf(libc::_SC_PAGESIZE) };
-    if p > 0 {
-        p as usize
-    } else {
-        4096
-    }
+    let ps = if p > 0 { p as usize } else { 4096 };
+    CACHED.store(ps, Ordering::Relaxed);
+    ps
 }
 
 /// The OS memory page size in bytes — 4 KiB on most x86-64, 16 KiB on
@@ -1125,7 +1135,7 @@ mod tests {
     #[test]
     #[cfg_attr(miri, ignore = "miri can't shim mmap / VirtualAlloc")]
     fn bump_arena_over_lazy_mmap_commits_on_alloc() {
-        use crate::layout::BumpArena;
+        use crate::BumpArena;
         // BumpArena is the commit-aware consumer: each allocate commits the
         // block before returning it, so writing through every returned
         // pointer is sound even though the backing was only reserved.
@@ -1145,7 +1155,7 @@ mod tests {
     #[test]
     #[cfg_attr(miri, ignore = "miri can't shim mmap / VirtualAlloc")]
     fn bump_over_passthrough_wrapper_over_lazy_mmap_commits() {
-        use crate::layout::BumpArena;
+        use crate::BumpArena;
         use crate::Statistics;
         // A pass-through FixedRange wrapper (Statistics) interposed between
         // BumpArena and a lazy mapping must forward `commit`, so writes are
