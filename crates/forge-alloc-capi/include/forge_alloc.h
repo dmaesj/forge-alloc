@@ -72,11 +72,18 @@ void forge_bump_free(forge_bump_t *handle, void *ptr, size_t size, size_t align)
 
 /*
  * Reclaim everything at once and rewind to the start of the buffer. Returns
- * nonzero on success. All previously returned pointers become invalid.
+ * nonzero on success. All previously returned pointers become invalid — do not
+ * read/write through them, and do not pass them to forge_bump_free (reset
+ * re-hands-out the same addresses, so a stale free would scrub a live block).
  */
 int forge_bump_reset(forge_bump_t *handle);
 
-/* Bytes still available for allocation. 0 for a null handle. */
+/*
+ * Bytes still available for allocation. 0 for a null handle. NOTE: this is the
+ * raw byte gap to the end of the buffer; an allocation with `align > 1` may
+ * consume extra alignment padding, so a request can fail even when
+ * `size <= forge_bump_remaining()`.
+ */
 size_t forge_bump_remaining(const forge_bump_t *handle);
 
 /* Total capacity (buffer length) in bytes. 0 for a null handle. */

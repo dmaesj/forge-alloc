@@ -94,6 +94,94 @@ fn exhaustion_and_invalid_args_return_null_or_zero() {
     }
 }
 
+/// A failed allocation must be side-effect-free: the cursor is untouched, so
+/// `allocated`/`remaining` are unchanged and a fitting request still succeeds.
+/// This is the bump arena's headline guarantee, exercised here at the FFI layer.
+#[test]
+fn failed_alloc_is_side_effect_free() {
+    let mut buf = [0u8; 64];
+    let mut handle = MaybeUninit::<ForgeBump>::uninit();
+    let h = handle.as_mut_ptr();
+    unsafe {
+        assert_eq!(forge_bump_init(h, buf.as_mut_ptr().cast(), buf.len()), 1);
+        assert!(!forge_bump_alloc(h, 16, 8).is_null());
+        let allocated_before = forge_bump_allocated(h);
+        let remaining_before = forge_bump_remaining(h);
+
+        // Overshoot: must fail and leave the cursor exactly where it was.
+        assert!(forge_bump_alloc(h, 4096, 8).is_null());
+        assert_eq!(forge_bump_allocated(h), allocated_before);
+        assert_eq!(forge_bump_remaining(h), remaining_before);
+
+        // A request that still fits succeeds.
+        assert!(!forge_bump_alloc(h, 16, 8).is_null());
+        forge_bump_destroy(h);
+    }
+}
+
+/// `reset` rewinds the cursor, so the first allocation after a reset must reuse
+/// the address of the first allocation before it — proving reclaim, not just a
+/// zeroed counter.
+#[test]
+fn reset_reuses_addresses() {
+    let mut buf = [0u8; 256];
+    let mut handle = MaybeUninit::<ForgeBump>::uninit();
+    let h = handle.as_mut_ptr();
+    unsafe {
+        assert_eq!(forge_bump_init(h, buf.as_mut_ptr().cast(), buf.len()), 1);
+        let first = forge_bump_alloc(h, 32, 8);
+        assert!(!first.is_null());
+        let _ = forge_bump_alloc(h, 32, 8);
+        assert_eq!(forge_bump_reset(h), 1);
+        let again = forge_bump_alloc(h, 32, 8);
+        assert_eq!(
+            first, again,
+            "first alloc after reset must reuse the address"
+        );
+        forge_bump_destroy(h);
+    }
+}
+
+/// A degenerate 1-byte buffer initializes, satisfies a 1-byte request once, then
+/// reports exhaustion.
+#[test]
+fn tiny_buffer_boundary() {
+    let mut buf = [0u8; 1];
+    let mut handle = MaybeUninit::<ForgeBump>::uninit();
+    let h = handle.as_mut_ptr();
+    unsafe {
+        assert_eq!(forge_bump_init(h, buf.as_mut_ptr().cast(), 1), 1);
+        assert_eq!(forge_bump_capacity(h), 1);
+        assert!(!forge_bump_alloc(h, 1, 1).is_null());
+        assert_eq!(forge_bump_remaining(h), 0);
+        assert!(forge_bump_alloc(h, 1, 1).is_null());
+        forge_bump_destroy(h);
+    }
+}
+
+/// A large alignment that exceeds the buffer fails cleanly (NULL); a satisfiable
+/// large alignment returns a correctly-aligned pointer.
+#[test]
+fn over_alignment_handling() {
+    let mut buf = [0u8; 256];
+    let mut handle = MaybeUninit::<ForgeBump>::uninit();
+    let h = handle.as_mut_ptr();
+    unsafe {
+        assert_eq!(forge_bump_init(h, buf.as_mut_ptr().cast(), buf.len()), 1);
+        // Alignment far larger than the whole buffer: clean failure, no UB.
+        assert!(forge_bump_alloc(h, 8, 4096).is_null());
+        // A 64-byte alignment fits in 256 bytes and must be honored.
+        let p = forge_bump_alloc(h, 8, 64);
+        assert!(!p.is_null());
+        assert_eq!(
+            p as usize % 64,
+            0,
+            "returned pointer must meet the requested alignment"
+        );
+        forge_bump_destroy(h);
+    }
+}
+
 /// The opaque C handle must be at least as large and as aligned as the real
 /// allocator — the same guarantee the in-crate static assertions enforce,
 /// re-checked here against the public type.

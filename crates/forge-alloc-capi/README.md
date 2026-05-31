@@ -103,17 +103,31 @@ cargo build -p forge-alloc-capi --release \
 
 Then link the `.a` into your image. The provided global allocator aborts if
 called, which never happens: the bump API allocates only out of *your* buffer,
-not the global heap. Build your image with `panic = "abort"` (bare-metal
-targets select this by default).
+not the global heap.
 
-**Rust `no_std` firmware** — your own crate already defines these lang items,
-so omit `staticlib-rt` (enabling it would collide) and depend on the `lib`
-(rlib) target instead:
+> **`staticlib-rt` requires an abort-panic target.** Bare-metal targets
+> (`thumbv7em-none-eabihf`, `wasm32-unknown-unknown`) default to
+> `panic = "abort"` and build cleanly. It will **not** build on a normal host
+> toolchain (Linux/macOS/Windows default to `panic = "unwind"`, which a no_std
+> staticlib can't support) — so you can't smoke-test this build locally; build
+> it for the embedded target directly.
 
-```sh
-cargo build -p forge-alloc-capi --release \
-    --no-default-features --target thumbv7em-none-eabihf
+**Rust `no_std` firmware** — your own crate already defines `#[panic_handler]`
+and `#[global_allocator]`, so **add `forge-alloc-capi` as a dependency** with
+`default-features = false` (do *not* enable `staticlib-rt` — it would collide
+with your lang items, and do *not* `cargo build -p` it standalone — that builds
+the `staticlib`/`cdylib` artifacts, which demand their own lang items and fail
+to link). As a Cargo dependency, Cargo emits only the `lib` (rlib), which
+defers the lang items to your binary:
+
+```toml
+# your firmware crate's Cargo.toml
+[dependencies]
+forge-alloc-capi = { version = "0.1", default-features = false }
 ```
+
+You'd then call the same `forge_bump_*` functions from Rust (they're exported on
+the rlib too), or just use `forge-alloc` directly.
 
 The `std` feature (on by default) only exists so the desktop *shared* library
 can pull a panic handler and allocator from std; embedded users turn it off.

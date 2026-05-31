@@ -62,6 +62,10 @@ This is the narrow slice of "forge-alloc, callable from C" that is both
   (`GuardPage`, `SplitMetadata`) require `mmap`/Win32 and `std`, i.e. an OS —
   the opposite of the embedded target this crate serves. They remain available
   in the Rust API for hosted use.
+- **`grow` / `realloc`.** There is no in-place resize. A bump arena can't
+  generally grow a non-top allocation, so a C caller that needs realloc-like
+  behavior must size the request up front, or `reset` and rebuild. Documented
+  here so the absence is intentional, not an oversight.
 
 ## ABI stability
 
@@ -83,10 +87,12 @@ The FFI surface is exercised two ways:
   covered even where a C toolchain isn't. This is the guarantee that travels
   with the repo.
 - **One-time manual check** (not yet wired into CI): the C and C++ examples were
-  compiled against the generated header and linked the built library, the
-  exported symbol names were checked against the header, and both examples ran
-  successfully against an MSVC build. A CI job that compiles the examples would
-  make this reproducible.
+  compiled against the generated header and linked the built **desktop `std`
+  cdylib** (MSVC), the exported symbol names were checked against the header, and
+  both examples ran successfully. Separately, the **`no_std` `staticlib-rt`
+  staticlib was build-verified for `thumbv7em-none-eabihf`** (it cannot be built
+  on a host toolchain — see the README caveat). A CI job that compiles the
+  examples and the embedded staticlib would make all of this reproducible.
 
 ## Roadmap (not commitments)
 

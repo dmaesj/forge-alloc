@@ -43,7 +43,10 @@ int main(void) {
   printf("allocated=%zu remaining=%zu\n", forge_bump_allocated(&arena),
          forge_bump_remaining(&arena));
 
-  /* free() scrubs the block with the poison pattern (0xDE). */
+  /* free() scrubs the block with the poison pattern (0xDE). Shown here only to
+   * demonstrate the scrub: since we reset() right after, a real caller that
+   * didn't need to wipe `a`'s contents would skip free() entirely (reset does
+   * not scrub — it just rewinds the cursor). */
   forge_bump_free(&arena, a, 64, 8);
 
   /* Bulk reclaim — the bump arena's way of "freeing everything". */

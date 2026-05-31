@@ -335,6 +335,11 @@ mod staticlib_rt {
     #[global_allocator]
     static GLOBAL: AbortAlloc = AbortAlloc;
 
+    /// Spins on panic. No panic is reachable from the FFI surface — every path
+    /// uses checked arithmetic and `Result`, with no `unwrap`/indexing/reachable
+    /// `debug_assert` — so this is a never-taken terminus rather than a live
+    /// hang. A firmware integrator who wants a hard fault instead can link the
+    /// rlib and supply their own `#[panic_handler]` (omit `staticlib-rt`).
     #[panic_handler]
     fn panic(_info: &core::panic::PanicInfo) -> ! {
         loop {}
