@@ -13,6 +13,8 @@
 //!   overflows.
 //! - [`PoisonOnFree<I>`] — overwrites freed memory with a configurable pattern.
 //!   Protects against UAF read disclosure.
+//! - [`ZeroizeOnFree<I>`] — volatile-zeroes freed memory; the write cannot be
+//!   dead-store-eliminated. The crypto-grade scrub for secret material.
 //! - [`Quarantine<I, EPOCHS>`] — holds freed blocks in a ring for `EPOCHS`
 //!   cycles before returning them to the inner allocator for reuse. Delays
 //!   slot reuse to widen the UAF / type-confusion attack window.
@@ -46,6 +48,7 @@ mod poison;
 mod quarantine;
 mod statistics;
 mod watermark;
+mod zeroize;
 
 // `guard_page`, `huge_page`, `numa`, and `split_metadata` all depend
 // on `mmap` / libc syscall helpers, so they require both `std` and a
@@ -66,6 +69,7 @@ pub use faulty::Faulty;
 pub use poison::{PoisonOnFree, DEFAULT_POISON};
 pub use quarantine::Quarantine;
 pub use statistics::{AllocStats, Statistics};
+pub use zeroize::ZeroizeOnFree;
 
 #[cfg(all(feature = "std", any(unix, windows)))]
 pub use guard_page::GuardPage;

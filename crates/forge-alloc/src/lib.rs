@@ -98,7 +98,8 @@ pub use layout::ExtendableSlab;
 
 #[doc(inline)]
 pub use hardening::{
-    AllocStats, CacheJitter, Canary, Faulty, PoisonOnFree, Quarantine, Statistics, DEFAULT_POISON,
+    AllocStats, CacheJitter, Canary, Faulty, PoisonOnFree, Quarantine, Statistics, ZeroizeOnFree,
+    DEFAULT_POISON,
 };
 
 // These hardening wrappers require libc / Win32 syscalls and so are

@@ -16,6 +16,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   header, C and C++ examples, and an FFI integration test. The ABI was
   verified end-to-end against MSVC `cl` (C and C++). See `docs/C_API.md`.
 
+### Added — `forge-alloc`
+- `ZeroizeOnFree<I>`: a crypto-grade hardening wrapper that volatile-zeroes
+  freed memory. Unlike `PoisonOnFree` (plain `write_bytes`, which the optimizer
+  may dead-store-eliminate), the scrub uses `write_volatile` + a compiler fence
+  so it cannot be elided, and it uses the trait-default `grow`/`shrink` so a
+  moved-from block and `shrink`'s discarded tail are erased too. No new
+  dependency. Re-exported from the crate root alongside `PoisonOnFree`.
+
 ### Added — CI / project hygiene
 - Supply-chain gate (`deny.toml` + cargo-deny CI job): advisories, license
   policy, and source vetting on every push.
