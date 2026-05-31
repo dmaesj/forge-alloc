@@ -487,28 +487,49 @@ unsafe impl OsBacked for MmapBacked {
         self.len
     }
 
+    /// # Caveat (shared with [`commit`](Self::commit))
+    ///
+    /// On Windows this reads the `committed` high-water mark through `&self`
+    /// under the `!Sync` single-writer contract. Do NOT call `release_pages`
+    /// on a `&MmapBacked` that is shared while an allocator (or `commit`)
+    /// advances the watermark — that races the `UnsafeCell`, exactly as
+    /// [`commit`](Self::commit)'s own caveat warns.
     #[inline]
     unsafe fn release_pages(&self, ptr: NonNull<u8>, size: usize) {
-        // On a Windows `lazy_commit` mapping, pages past the commit high-water
-        // mark are reserved-but-uncommitted, and `VirtualAlloc(MEM_RESET)`
-        // rejects uncommitted pages with ERROR_INVALID_PARAMETER — a silent
-        // no-op that also leaves a stale error on the `mmap_last_os_error`
-        // probe. Clamp the release range to the committed prefix so the reset
-        // only ever touches committed pages. For eager mappings `committed ==
-        // len`, so this is a no-op; on Unix `madvise` tolerates untouched
-        // pages, so clamping there only avoids redundant work.
-        //
-        // SAFETY: `!Sync` single-writer — exclusive access to the `committed`
-        // watermark, the same contract `commit` relies on.
-        let committed = unsafe { *self.committed.get() };
-        let off = (ptr.as_ptr() as usize).saturating_sub(self.ptr.as_ptr() as usize);
-        let clamped = off.saturating_add(size).min(committed).saturating_sub(off);
-        if clamped == 0 {
-            return;
+        // The commit watermark is a Windows-only construct: `os_commit` is a
+        // no-op on Unix and never advances it. So the clamp below is gated to
+        // Windows rather than applied cross-platform — on Unix `madvise`
+        // tolerates untouched pages, so the full range is always safe and a
+        // clamp would be dead code that could silently under-release if a
+        // future Unix lazy path ever set `committed < len`.
+        #[cfg(windows)]
+        {
+            // On a `lazy_commit` mapping, pages past the high-water mark are
+            // reserved-but-uncommitted, and `VirtualAlloc(MEM_RESET)` rejects
+            // uncommitted pages with ERROR_INVALID_PARAMETER — a silent no-op
+            // that also leaves a stale error on the `mmap_last_os_error` probe.
+            // Clamp the release range to the committed prefix so the reset only
+            // ever touches committed pages. For eager mappings `committed ==
+            // len`, so this is a no-op.
+            //
+            // SAFETY: `!Sync` single-writer — exclusive access to the watermark
+            // (see the method caveat above), the same contract `commit` relies on.
+            let committed = unsafe { *self.committed.get() };
+            let off = (ptr.as_ptr() as usize).saturating_sub(self.ptr.as_ptr() as usize);
+            let clamped = off.saturating_add(size).min(committed).saturating_sub(off);
+            if clamped == 0 {
+                return;
+            }
+            // SAFETY: caller has promised [ptr, ptr+size) lies wholly inside our
+            // region and has no live allocations; clamping only shrinks the range.
+            unsafe { os_release_pages(ptr, clamped) };
         }
-        // SAFETY: caller has promised [ptr, ptr+size) lies wholly inside our
-        // region and has no live allocations; clamping only shrinks the range.
-        unsafe { os_release_pages(ptr, clamped) };
+        #[cfg(not(windows))]
+        {
+            // SAFETY: caller has promised [ptr, ptr+size) lies wholly inside our
+            // region and has no live allocations.
+            unsafe { os_release_pages(ptr, size) };
+        }
     }
 
     #[inline]

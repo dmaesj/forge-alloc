@@ -103,6 +103,9 @@ const fn rounding_granularity(hp_size: usize) -> usize {
 pub struct HugePageBacked {
     ptr: NonNull<u8>,
     len: usize,
+    /// Effective huge-page granularity the mapping is aligned to / a multiple
+    /// of — `rounding_granularity(hp_size)`, which can exceed the requested
+    /// `hp_size` on macOS x86_64. Reported by [`Self::huge_page_size`].
     huge_page_size: usize,
     cursor: UnsafeCell<usize>,
 }
@@ -162,12 +165,19 @@ impl HugePageBacked {
         // SAFETY: platform os_map_huge enforces its own invariants and
         // returns a non-null pointer to `len` writable bytes on
         // success; on failure errno / GetLastError has been recorded
-        // via mmap_record_os_error.
+        // via mmap_record_os_error. Pass the *original* `hp_size`: on Linux
+        // it selects the MAP_HUGE_<size> pool tier; on macOS x86_64 it is
+        // ignored (the superpage size is fixed).
         let ptr = unsafe { os_map_huge(len, hp_size)? };
         Ok(Self {
             ptr,
             len,
-            huge_page_size: hp_size,
+            // Store the *effective* granularity (`round`), not the requested
+            // `hp_size`: on macOS x86_64 the real superpage size can exceed a
+            // sub-2-MiB request, and `huge_page_size()` must report the size
+            // the mapping is actually aligned to / a multiple of. On every
+            // other target `round == hp_size`, so this is unchanged.
+            huge_page_size: round,
             cursor: UnsafeCell::new(0),
         })
     }
@@ -192,8 +202,13 @@ impl HugePageBacked {
         self.len - self.allocated()
     }
 
-    /// Huge page size in effect for this mapping. The mapping is a
+    /// Huge page size *in effect* for this mapping. The mapping length is a
     /// multiple of this value and `base()` is aligned to it.
+    ///
+    /// This is the effective granularity, which may exceed the `hp_size`
+    /// passed to [`with_huge_page_size`](Self::with_huge_page_size): on macOS
+    /// x86_64 a sub-2-MiB request is raised to the fixed 2 MiB superpage size,
+    /// and this accessor reports that 2 MiB.
     #[inline]
     pub const fn huge_page_size(&self) -> usize {
         self.huge_page_size
@@ -317,12 +332,12 @@ unsafe impl Send for HugePageBacked {}
 #[cfg(target_os = "linux")]
 fn encode_huge_size_linux(hp_size: usize) -> i32 {
     let hp_log2: u32 = hp_size.trailing_zeros();
-    // SAFETY of the math: hp_log2 in [12, 63] (constructor validates
-    // hp_size >= 4096 and power-of-two; 4096 = 2^12, usize::MAX
-    // covers 2^63). MAP_HUGE_SHIFT == 26 < 32 so the u32 shift
-    // amount never panics. The shifted value (max 63 << 26 =
-    // 0xFC000000) fits in u32; the bit-preserving `as i32` cast
-    // gives the same bit pattern the kernel ABI expects.
+    // SAFETY of the math: hp_log2 in [12, usize::BITS - 1] (constructor
+    // validates hp_size >= 4096 and power-of-two; 4096 = 2^12). That is
+    // [12, 63] on 64-bit and [12, 31] on 32-bit targets. MAP_HUGE_SHIFT
+    // == 26 < 32 so the u32 shift amount never panics. The shifted value
+    // (max 63 << 26 = 0xFC000000) fits in u32; the bit-preserving `as i32`
+    // cast gives the same bit pattern the kernel ABI expects.
     (hp_log2 << libc::MAP_HUGE_SHIFT as u32) as i32
 }
 

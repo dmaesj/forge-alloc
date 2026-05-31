@@ -118,8 +118,11 @@ impl NonZeroLayout {
     #[inline]
     pub const fn pad_to_align(&self) -> Self {
         let align = self.align.get();
-        // The plain `+` cannot overflow: `new` caps `size` at
-        // `isize::MAX - (align - 1)`, so `size + align - 1 <= isize::MAX`.
+        // The plain `+` cannot overflow. Rust evaluates `size + align - 1` as
+        // `(size + align) - 1`, so the load-bearing intermediate is `size +
+        // align`, NOT the final `size + align - 1`. `new` caps `size` at
+        // `isize::MAX - (align - 1)`, so `size + align <= isize::MAX + 1 =
+        // 2^63 <= usize::MAX` — the intermediate fits without wrapping.
         let padded = (self.size.get() + align - 1) & !(align - 1);
         // Pin that load-bearing coincidence: `isize::MAX - (align - 1)` is
         // itself an `align`-multiple (since `isize::MAX + 1 = 2^63` is a
