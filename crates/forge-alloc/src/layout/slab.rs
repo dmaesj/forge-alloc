@@ -355,7 +355,7 @@ unsafe impl<T, B: Allocator + FixedRange, M: FreelistProtection> Deallocator for
     ///   within a slot, not a pointer from another slab or allocator).
     /// - The caller is responsible for running `T`'s destructor (e.g. via
     ///   `core::ptr::drop_in_place`) before calling `deallocate`. This method
-    ///   overwrites the slot's bytes with a a `FreeLink`.
+    ///   overwrites the slot's bytes with a `FreeLink`.
     /// - Passing the same `ptr` twice without an intervening `allocate` is a
     ///   double-free and is UB. **No protection level — including
     ///   `SipHashMAC` — detects a base-of-slot double-free.** The tripwire
@@ -367,11 +367,14 @@ unsafe impl<T, B: Allocator + FixedRange, M: FreelistProtection> Deallocator for
     ///   same index in place, which then verifies on pop. The MAC's protection
     ///   is against a link *forged or relocated to a different slot* (and the
     ///   move-safety false-fail the index nonce fixes) — not an in-place
-    ///   re-sign. Detecting double-free needs orthogonal per-slot state (a
-    ///   live/free bit, a generation tag — see
-    ///   [`GenerationalSlab`](crate::GenerationalSlab), or a
-    ///   [`Quarantine`](crate::Quarantine) layer), which this slab does not
-    ///   carry by design.
+    ///   re-sign. *Detecting* double-free needs orthogonal per-slot state — a
+    ///   live/free bit or a generation tag, e.g.
+    ///   [`GenerationalSlab`](crate::GenerationalSlab), which rejects a stale
+    ///   handle on its second free — which this slab does not carry by design.
+    ///   A [`Quarantine`](crate::Quarantine) layer does *not* detect it (it
+    ///   keeps no per-slot state and would forward both frees to the inner
+    ///   slab); it only delays slot reuse, shrinking the window in which the
+    ///   aliased slot is handed back out.
     #[inline]
     unsafe fn deallocate(&self, ptr: NonNull<u8>, _layout: NonZeroLayout) {
         // Layout sanity: an honest caller's layout fits within block_stride.
