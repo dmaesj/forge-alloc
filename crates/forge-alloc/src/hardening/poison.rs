@@ -326,6 +326,14 @@ mod tests {
     }
 
     #[test]
+    fn inner_is_accessible() {
+        let p = PoisonOnFree::new(InlineBacked::<64>::new());
+        // FixedRange passthrough reaches the inner backing (mirror of the
+        // ZeroizeOnFree test).
+        assert_eq!(p.size(), 64);
+    }
+
+    #[test]
     fn explicit_pattern_set() {
         let p = PoisonOnFree::with_pattern(InlineBacked::<64>::new(), 0x42);
         assert_eq!(p.pattern(), 0x42);
