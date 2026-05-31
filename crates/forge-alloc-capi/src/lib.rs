@@ -186,6 +186,11 @@ pub unsafe extern "C" fn forge_bump_alloc_zeroed(
 /// `size == 0`) is ignored. `align` is accepted for symmetry but unused, since
 /// the scrub depends only on `ptr`/`size`.
 ///
+/// The poison scrub is `O(size)`. Since reclaim is [`forge_bump_reset`]'s job,
+/// a caller that does **not** need use-after-free scrubbing should simply skip
+/// `free` and reclaim in bulk — `free` does no other work, so not calling it is
+/// the fast path.
+///
 /// # Safety
 ///
 /// `ptr`/`size` must name a live block previously returned by

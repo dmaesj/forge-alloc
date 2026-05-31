@@ -65,7 +65,8 @@ void *forge_bump_alloc_zeroed(forge_bump_t *handle, size_t size, size_t align);
  * individually reclaimed (a bump arena reclaims in bulk via reset); this is for
  * hygiene and symmetry. A NULL `ptr` (or `size == 0`) is ignored. `size` must
  * not exceed the original block — a larger `size` scrubs out of bounds. `align`
- * is accepted for symmetry but unused.
+ * is accepted for symmetry but unused. The scrub is O(size); if you don't need
+ * it, skip free and reclaim with forge_bump_reset — free does no other work.
  */
 void forge_bump_free(forge_bump_t *handle, void *ptr, size_t size, size_t align);
 
