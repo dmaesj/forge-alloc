@@ -237,3 +237,42 @@ jobs:
           # Default checks are still applied by kani itself; the action's
           # surface just no longer carries the toggle.
           args: -p forge-alloc
+
+  # ----------------------------------------------------------------
+  # MSRV: verify the declared `rust-version = "1.84"` promise for the
+  # two PUBLISHED library crates. Lib-only on purpose — rust-version is
+  # the contract for *depending on* the crate, not for building our own
+  # dev-dependency-backed test/bench targets (proptest/criterion track a
+  # newer toolchain of their own). The `incompatible_msrv` clippy lint
+  # catches some violations on `stable`; this job catches the rest by
+  # actually compiling on 1.84.
+  # ----------------------------------------------------------------
+  msrv:
+    name: MSRV (rust 1.84)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.84.0
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: msrv
+
+      - name: cargo check published crates (default features)
+        run: cargo check -p forge-alloc -p forge-alloc-core --lib
+      - name: cargo check published crates (all features)
+        run: cargo check -p forge-alloc -p forge-alloc-core --lib --all-features
+
+  # ----------------------------------------------------------------
+  # Supply-chain gate: cargo-deny vets the dependency tree for known
+  # RUSTSEC advisories, license-policy violations, and untrusted
+  # sources (git / non-crates.io registries). Config lives in the
+  # repo-root `deny.toml`. Run locally with `cargo deny check`.
+  # ----------------------------------------------------------------
+  cargo_deny:
+    name: cargo-deny (advisories, licenses, bans, sources)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check advisories licenses bans sources

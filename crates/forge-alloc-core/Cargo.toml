@@ -9,6 +9,12 @@ repository.workspace   = true
 keywords    = ["allocator", "memory", "no-std", "embedded", "traits"]
 categories  = ["memory-management", "no-std"]
 
+# docs.rs builds default features only by default; the SipHash MAC and PAC
+# stub surfaces are feature-gated. Build the full API. CI already verifies
+# `cargo doc --all-features` is warning-clean.
+[package.metadata.docs.rs]
+all-features = true
+
 [features]
 default = ["std"]
 std     = []

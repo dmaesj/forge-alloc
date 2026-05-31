@@ -1,0 +1,64 @@
+# cargo-deny configuration — supply-chain gate for the forge-alloc family.
+#
+# Local:  cargo deny check
+# CI:     cargo deny check advisories licenses bans sources  (see ci.yml)
+#
+# forge-alloc ships security guarantees, so its own dependency tree is
+# vetted for known advisories, license compatibility, and untrusted
+# sources on every push.
+
+[graph]
+# Vet the dependency tree as pruned for the host platforms forge-alloc
+# actually runs on. (Bare-metal / wasm portability is covered separately
+# by the cross-compile CI jobs.) libc is unix-only and windows-sys is
+# windows-only, so both families must appear here to see the full tree.
+targets = [
+    "x86_64-unknown-linux-gnu",
+    "aarch64-unknown-linux-gnu",
+    "x86_64-pc-windows-msvc",
+    "x86_64-apple-darwin",
+]
+
+[advisories]
+version = 2
+# RUSTSEC advisory database. With version = 2, vulnerabilities fail the
+# build by default; yanked crates are treated the same.
+yanked  = "deny"
+ignore  = []
+
+[licenses]
+version = 2
+# SPDX licenses permitted anywhere in the graph (including dev/bench
+# dependencies). Every entry was observed in the current tree.
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "Zlib",
+    "Unicode-3.0",
+    "Unlicense",
+    # File-level weak copyleft. The only match is a transitive dev/bench
+    # dependency — never shipped to consumers of forge-alloc.
+    "MPL-2.0",
+]
+confidence-threshold = 0.92
+# The allowlist carries a little headroom (BSD-2, Zlib, Unlicense, …) so a
+# routine dev-dep bump that pulls one of these permissive licenses doesn't
+# fail CI. Don't warn when an allowed license isn't currently in the tree.
+unused-allowed-license = "allow"
+
+[bans]
+# Duplicate versions are common in large dev-dep trees (proptest,
+# criterion); warn rather than fail the build over them.
+multiple-versions = "warn"
+# Wildcard (`*`) version requirements are forbidden for real deps; the
+# workspace path crates pin explicit versions, so allow those.
+wildcards            = "deny"
+allow-wildcard-paths = true
+
+[sources]
+# crates.io only — no git or alternative-registry dependencies.
+unknown-registry = "deny"
+unknown-git      = "deny"

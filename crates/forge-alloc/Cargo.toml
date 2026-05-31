@@ -10,6 +10,12 @@ readme      = "README.md"
 keywords    = ["allocator", "memory", "no-std", "embedded", "security"]
 categories  = ["memory-management", "no-std"]
 
+# docs.rs builds default features only by default; several compositions
+# (SipHash MAC, PAC stub) live behind feature gates. Build the full API.
+# CI already verifies `cargo doc --all-features` is warning-clean.
+[package.metadata.docs.rs]
+all-features = true
+
 [features]
 default = ["std"]
 std       = ["forge-alloc-core/std"]
