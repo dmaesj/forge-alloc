@@ -32,6 +32,27 @@ use core::ptr::NonNull;
 
 use forge_alloc_core::{AllocError, Allocator, Deallocator, FixedRange, NonZeroLayout};
 
+/// Volatile-zero the 8-byte canary word at `ptr`, **byte-wise**.
+///
+/// The post canary sits at `user_ptr + size`; `user_ptr` is `max(8, align)`-
+/// aligned but `size` is arbitrary, so that address can be unaligned for a
+/// `u64`. A `write_volatile` through a misaligned `*mut u64` is undefined
+/// behavior — byte-wise volatile writes are valid at any alignment while
+/// keeping the scrub non-elidable (the reason a plain `write_bytes` is not
+/// used: the optimizer could dead-store-eliminate a write into about-to-be-
+/// freed memory, leaving the per-process seed recoverable).
+///
+/// # Safety
+///
+/// `ptr` must be valid for writes of 8 bytes.
+#[inline]
+unsafe fn volatile_zero_canary(ptr: *mut u8) {
+    for i in 0..8 {
+        // SAFETY: caller guarantees 8 writable bytes starting at `ptr`.
+        unsafe { core::ptr::write_volatile(ptr.add(i), 0u8) };
+    }
+}
+
 /// The Canary wrapper.
 ///
 /// The `value: u64` is the canary word stored both before and after the user
@@ -196,11 +217,13 @@ unsafe impl<I: Allocator> Deallocator for Canary<I> {
             // secret; if it persists in deallocated memory until OS
             // reclaim it's UAF-readable by any code that later borrows
             // the freed region (Slab freelist reuse, BumpArena reset,
-            // mmap remap). `write_volatile` defeats the dead-store
-            // elimination the optimizer would otherwise apply to a
-            // write into about-to-be-freed memory.
-            core::ptr::write_volatile(ptr.as_ptr().sub(8).cast::<u64>(), 0);
-            core::ptr::write_volatile(ptr.as_ptr().add(layout.size().get()).cast::<u64>(), 0);
+            // mmap remap). Byte-wise volatile writes defeat the dead-store
+            // elimination the optimizer would otherwise apply to a write
+            // into about-to-be-freed memory, and — unlike a `*mut u64`
+            // volatile store — stay sound at the post canary's arbitrary
+            // (`size`-offset) alignment.
+            volatile_zero_canary(ptr.as_ptr().sub(8));
+            volatile_zero_canary(ptr.as_ptr().add(layout.size().get()));
             core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
         }
         // SAFETY: inner_ptr / inner layout reproduce the pair returned by
@@ -263,6 +286,16 @@ unsafe impl<I: Allocator> Allocator for Canary<I> {
     }
 }
 
+/// `FixedRange` passthrough so this wrapper composes over a `lazy_commit`
+/// `MmapBacked` and similar backings.
+///
+/// **Footgun:** canary words are written and verified only in this wrapper's
+/// `allocate`/`deallocate`. If you nest it *as a backing under* an arena —
+/// `BumpArena<Canary<..>>` — the arena carves directly from `base()`/`size()`
+/// and never calls `Canary::allocate`/`deallocate`, so **no canary is ever
+/// placed or checked** and the overflow detection silently does nothing while
+/// the type name still advertises it. Keep the hardening wrapper **outermost**
+/// (wrapping the allocator), never as the `FixedRange` an arena consumes.
 impl<I: FixedRange> FixedRange for Canary<I> {
     #[inline]
     fn base(&self) -> NonNull<u8> {
@@ -305,6 +338,57 @@ mod tests {
             // Write something in the user region — must not affect canaries.
             core::ptr::write_bytes(ptr.as_ptr(), 0x42, 32);
             c.deallocate(ptr, layout);
+        }
+    }
+
+    /// Regression for the misaligned post-canary scrub: a `size` that is not a
+    /// multiple of 8 puts the post canary at `user_ptr + size`, an address that
+    /// is not 8-aligned. The free-time zeroing must stay sound there (byte-wise
+    /// volatile, not a `*mut u64` volatile store). UB here is caught under Miri;
+    /// in a normal run this just exercises the path without tripping.
+    #[test]
+    fn non_multiple_of_eight_size_roundtrips() {
+        let c = build();
+        let layout = NonZeroLayout::from_size_align(20, 8).unwrap();
+        let block = c.allocate(layout).unwrap();
+        let ptr = block.cast::<u8>();
+        unsafe {
+            core::ptr::write_bytes(ptr.as_ptr(), 0x42, 20);
+            c.deallocate(ptr, layout);
+        }
+    }
+
+    /// The resize path is inherited from the `Allocator` trait default
+    /// (allocate-copy-free), which routes through `Canary::allocate` (fresh
+    /// canaries on the new block) and `Canary::deallocate` (verifies the old
+    /// block). Guards that grow/shrink preserve user bytes and keep both ends
+    /// canary-protected — previously untested.
+    #[test]
+    fn grow_then_shrink_preserves_data_and_canaries() {
+        let c = build();
+        let old = NonZeroLayout::from_size_align(16, 8).unwrap();
+        let mid = NonZeroLayout::from_size_align(48, 8).unwrap();
+        let new = NonZeroLayout::from_size_align(24, 8).unwrap();
+        unsafe {
+            let block = c.allocate(old).unwrap();
+            let ptr = block.cast::<u8>();
+            core::ptr::write_bytes(ptr.as_ptr(), 0x77, 16);
+
+            let grown = c.grow(ptr, old, mid).unwrap();
+            let gptr = grown.cast::<u8>();
+            // Original 16 bytes copied into the grown block.
+            for i in 0..16 {
+                assert_eq!(*gptr.as_ptr().add(i), 0x77, "grow lost byte {i}");
+            }
+
+            let shrunk = c.shrink(gptr, mid, new).unwrap();
+            let sptr = shrunk.cast::<u8>();
+            for i in 0..16 {
+                assert_eq!(*sptr.as_ptr().add(i), 0x77, "shrink lost byte {i}");
+            }
+            // Deallocate passes canary verification on the final block (would
+            // panic if grow/shrink failed to re-place the canaries).
+            c.deallocate(sptr, new);
         }
     }
 

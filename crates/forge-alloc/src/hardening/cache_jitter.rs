@@ -323,9 +323,12 @@ impl<I> CacheJitter<I> {
         let disp_bytes = (disp_lines as usize) << self.line_shift;
         // Defense-in-depth: even if the MAC verified, the recovered
         // displacement must lie in the legitimate range. A MAC collision
-        // outside the range is rejected before we touch
-        // `inner.deallocate`.
-        if disp_bytes >= self.associativity * self.cache_line_size {
+        // outside the range is rejected before we touch `inner.deallocate`.
+        // Bound against `max_displacement()` — the single source of truth for
+        // the legal max `(associativity - 1) * cache_line_size` — rather than
+        // recomputing `associativity * cache_line_size` here, so the check
+        // can't drift from the encoding if either changes.
+        if disp_bytes > self.max_displacement() {
             return Err(());
         }
         Ok(disp_bytes)
@@ -527,6 +530,16 @@ unsafe impl<I: Allocator> Allocator for CacheJitter<I> {
     }
 }
 
+/// `FixedRange` passthrough so this wrapper composes over a `lazy_commit`
+/// `MmapBacked` and similar backings.
+///
+/// **Footgun:** the displacement header is written and MAC-verified only in
+/// this wrapper's `allocate`/`deallocate`. If you nest it *as a backing under*
+/// an arena — `BumpArena<CacheJitter<..>>` — the arena carves directly from
+/// `base()`/`size()` and never calls `CacheJitter::allocate`/`deallocate`, so
+/// **no displacement is applied and no header is ever checked** while the type
+/// name still advertises the jitter. Keep the hardening wrapper **outermost**
+/// (wrapping the allocator), never as the `FixedRange` an arena consumes.
 impl<I: FixedRange> FixedRange for CacheJitter<I> {
     #[inline]
     fn base(&self) -> NonNull<u8> {
@@ -554,19 +567,6 @@ mod tests {
 
     #[cfg(feature = "std")]
     use crate::backing::MmapBacked;
-
-    /// Tiny CacheJitter over a stack-buffer BumpArena — fine for round-
-    /// trip / param-rejection tests, but cache-line-aligned tests need a
-    /// MmapBacked source (InlineBacked has MAX_ALIGN = 16).
-    fn build_inline() -> CacheJitter<BumpArena<InlineBacked<8192>>> {
-        CacheJitter::with_params(
-            BumpArena::new(InlineBacked::<8192>::new()).unwrap(),
-            64,
-            8,
-            0x1234_5678_9ABC_DEF0,
-        )
-        .expect("valid params")
-    }
 
     /// CacheJitter over MmapBacked — supports up to page alignment, so
     /// jitter applies for all alignments up to cache_line_size (64).
@@ -632,54 +632,99 @@ mod tests {
     #[cfg_attr(miri, ignore = "miri-incompatible: mmap / threads")]
     fn displacement_distribution_hits_multiple_sets() {
         // With 8-way associativity and a fixed seed, repeated allocations
-        // should land at multiple distinct cache-set offsets (mod
-        // 8 * 64 = 512). xorshift64 should distribute well enough to hit
-        // at least 4 distinct buckets across 64 iterations.
+        // should be assigned multiple distinct displacements. We read the
+        // *displacement itself* back out of each allocation's header rather
+        // than bucketing the user pointer: the inner BumpArena's cursor
+        // advances every allocation, so `user_ptr % 512` would vary even if
+        // the displacement were stuck at 0 — making a pointer-based test pass
+        // vacuously. Unpacking the header isolates the jitter contribution.
         let cj = build_mmap();
         let layout = NonZeroLayout::from_size_align(32, 8).unwrap();
-        let mut offsets = alloc::collections::BTreeSet::new();
+        let mut displacements = alloc::collections::BTreeSet::new();
         for _ in 0..64 {
             let block = cj.allocate(layout).unwrap();
-            let addr = block.cast::<u8>().as_ptr() as usize;
-            offsets.insert(addr % (8 * 64));
+            let user_ptr = block.cast::<u8>().as_ptr();
+            // SAFETY: a jittered allocation stores its packed header in the
+            // 8 bytes at `user_ptr - JITTER_HEADER_SIZE`.
+            let disp = unsafe {
+                let header =
+                    core::ptr::read_unaligned(user_ptr.sub(JITTER_HEADER_SIZE).cast::<u64>());
+                cj.unpack_header(user_ptr as usize, header)
+                    .expect("freshly written header must verify")
+            };
+            displacements.insert(disp);
         }
         assert!(
-            offsets.len() >= 4,
-            "expected diverse cache-set landing offsets, got {}",
-            offsets.len(),
+            displacements.len() >= 4,
+            "expected diverse displacements (jitter stuck?), got {}",
+            displacements.len(),
         );
     }
 
+    #[cfg(feature = "std")]
     #[test]
+    #[cfg_attr(miri, ignore = "miri-incompatible: mmap / threads")]
     fn oversized_align_passes_through_without_jitter() {
-        // align > cache_line_size (here 128 > 64) — wrapper must forward
-        // unchanged so the inner allocator handles alignment. Verify the
-        // forwarded request reaches inner intact: use a small alloc with
-        // align=128 and round-trip it through dealloc.
-        let cj = build_inline();
+        // align (128) > cache_line_size (64): jitter granularity is one cache
+        // line, so the wrapper cannot preserve the larger alignment and MUST
+        // forward untouched — no prefix, no displacement header. Use
+        // MmapBacked (page-aligned base, satisfies align=128) so the success
+        // path is deterministic instead of error-path-vacuous.
+        let cj = build_mmap();
         let layout = NonZeroLayout::from_size_align(8, 128).unwrap();
-        // If the InlineBacked-backed bump arena can satisfy align=128
-        // (depends on buffer base address), confirm the user_ptr matches
-        // what raw inner.allocate would have returned (no displacement).
-        // Otherwise, confirm both paths produce the same error.
-        let res = cj.allocate(layout);
-        // We can't directly compare to a parallel inner call (the inner
-        // has interior state). Just confirm that a successful alloc has
-        // no displacement header — equivalently that the high cache-line
-        // bits of the returned pointer match what inner would naturally
-        // produce. The contract here is "no inflation, no displacement",
-        // and we check it by round-tripping a write + dealloc; if the
-        // wrapper had inflated, the inner's freelist bookkeeping would
-        // mismatch and the second alloc-after-dealloc would corrupt.
-        if let Ok(block) = res {
-            let p = block.cast::<u8>();
-            unsafe {
-                core::ptr::write_bytes(p.as_ptr(), 0xAA, 8);
-                cj.deallocate(p, layout);
-            }
+        let base = cj.inner().base().as_ptr() as usize;
+        let block = cj.allocate(layout).expect("mmap base satisfies align=128");
+        let user_ptr = block.cast::<u8>().as_ptr();
+        let addr = user_ptr as usize;
+        assert_eq!(addr % 128, 0, "pass-through must honor the requested align");
+        // A *jittered* allocation always prepends at least one cache line
+        // (header + displacement >= cache_line_size = 64). Pass-through adds
+        // none, so the user pointer sits within alignment padding of the base.
+        // This would fail if the wrapper wrongly inflated/displaced the request.
+        assert!(
+            addr - base < 64,
+            "pass-through must not add a jitter prefix (offset {} >= one cache line)",
+            addr - base,
+        );
+        unsafe {
+            core::ptr::write_bytes(user_ptr, 0xAA, 8);
+            cj.deallocate(block.cast(), layout);
         }
-        // Either alloc succeeded (and we round-tripped) or it failed
-        // (forwarded inner's error). Both are valid pass-through outcomes.
+    }
+
+    /// The resize path is inherited from the `Allocator` trait default
+    /// (allocate-copy-free), which routes through `CacheJitter::allocate`
+    /// (fresh displacement header on the new block) and `deallocate` (MAC-
+    /// verifies the old block). Guards that grow/shrink preserve user bytes
+    /// and keep the header MAC valid end-to-end — previously untested.
+    #[cfg(feature = "std")]
+    #[test]
+    #[cfg_attr(miri, ignore = "miri-incompatible: mmap / threads")]
+    fn grow_then_shrink_preserves_data_and_header() {
+        let cj = build_mmap();
+        let old = NonZeroLayout::from_size_align(16, 8).unwrap();
+        let mid = NonZeroLayout::from_size_align(64, 8).unwrap();
+        let new = NonZeroLayout::from_size_align(24, 8).unwrap();
+        unsafe {
+            let block = cj.allocate(old).unwrap();
+            let ptr = block.cast::<u8>();
+            core::ptr::write_bytes(ptr.as_ptr(), 0x77, 16);
+
+            let grown = cj.grow(ptr, old, mid).unwrap();
+            let gptr = grown.cast::<u8>();
+            for i in 0..16 {
+                assert_eq!(*gptr.as_ptr().add(i), 0x77, "grow lost byte {i}");
+            }
+
+            let shrunk = cj.shrink(gptr, mid, new).unwrap();
+            let sptr = shrunk.cast::<u8>();
+            for i in 0..16 {
+                assert_eq!(*sptr.as_ptr().add(i), 0x77, "shrink lost byte {i}");
+            }
+            // Deallocate MAC-verifies the final block's header — panics if
+            // grow/shrink failed to re-establish it.
+            cj.deallocate(sptr, new);
+        }
     }
 
     #[cfg(feature = "std")]

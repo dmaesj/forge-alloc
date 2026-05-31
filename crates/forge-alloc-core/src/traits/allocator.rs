@@ -285,9 +285,12 @@ pub unsafe trait Allocator: Deallocator {
     /// SIGSEGV/exception, not a Rust-observable counter.
     ///
     /// Hardened wrappers that `panic!` on detected corruption
-    /// (`Canary`, `CacheJitter`) increment their counter immediately
-    /// before the panic, so post-mortem analysis of a core dump can
-    /// read the count.
+    /// (`Canary`, `CacheJitter`) do **not** maintain a local counter —
+    /// detection aborts immediately, so the first event would also be the
+    /// last and a per-layer delta is meaningless. Their `corruption_events`
+    /// forwards to the inner allocator, surfacing any silent-disarm counts
+    /// from underneath; the corruption they detect is signalled by the
+    /// abort itself, not by this counter.
     #[inline]
     fn corruption_events(&self) -> u64 {
         0
