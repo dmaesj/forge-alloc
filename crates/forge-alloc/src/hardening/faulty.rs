@@ -382,11 +382,14 @@ mod tests {
         }
     }
 
-    /// `capacity_bytes` / `corruption_events` are forwarded to inner, not the
-    /// trait defaults (`None` / unforwarded `0`). A regression dropping a
-    /// forward would otherwise be silent.
+    /// `capacity_bytes` is forwarded to inner, not the trait default `None` —
+    /// a dropped forward would make this `None != Some(16)` and fail.
+    /// (`corruption_events` is asserted as a smoke check only: a fresh slab and
+    /// the unforwarded default both read 0, so this can't regression-proof that
+    /// forward without a non-zero corruption source, which the family can't
+    /// easily inject here.)
     #[test]
-    fn forwards_capacity_and_corruption_events() {
+    fn forwards_capacity_bytes() {
         let f: Faulty<Slab<u64, InlineBacked<512>>, NeverFail> =
             Faulty::new(Slab::new(2, InlineBacked::<512>::new()).unwrap(), NeverFail);
         let bare = Slab::<u64, InlineBacked<512>>::new(2, InlineBacked::<512>::new()).unwrap();
@@ -395,6 +398,10 @@ mod tests {
             bare.capacity_bytes(),
             "capacity_bytes must forward to inner, not be None",
         );
-        assert_eq!(f.corruption_events(), 0);
+        assert!(
+            bare.capacity_bytes().is_some(),
+            "bare slab must report a capacity"
+        );
+        assert_eq!(f.corruption_events(), 0); // smoke check (see doc)
     }
 }
