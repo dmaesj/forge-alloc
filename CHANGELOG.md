@@ -22,6 +22,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - MSRV CI job pinned to Rust 1.84 for the published crates.
 - `[package.metadata.docs.rs] all-features = true` on both library crates.
 - `SECURITY.md` vulnerability-disclosure policy.
+- `forge-alloc-capi` CI coverage: a `no_std` rlib check in the `no_std` job,
+  plus a `capi_ffi` job that compiles and runs the C and C++ examples against
+  the built shared library and builds the embedded `staticlib-rt` static
+  library for `thumbv7em-none-eabihf` — making the previously-manual MSVC
+  verification CI-enforced.
 
 ## [0.3.3] - 2026-05-28
 

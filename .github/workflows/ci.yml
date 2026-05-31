@@ -71,6 +71,59 @@ jobs:
       - name: cargo check -p forge-alloc (no_std)
         run: cargo check -p forge-alloc --no-default-features --lib
 
+      # forge-alloc-capi's `staticlib`/`cdylib` crate-types are FINAL artifacts
+      # that demand their own #[panic_handler]/#[global_allocator], so a plain
+      # `cargo check --lib` would fail. Override the crate-type to `rlib` — the
+      # only valid no_std surface, and exactly how a Rust no_std consumer
+      # depends on it (Cargo emits just the rlib, deferring lang items).
+      - name: cargo rustc -p forge-alloc-capi (no_std rlib)
+        run: cargo rustc -p forge-alloc-capi --no-default-features --lib --crate-type rlib
+
+  # ----------------------------------------------------------------
+  # forge-alloc-capi C ABI: prove the C/C++ examples still compile and
+  # run against the built shared library (the surface a C consumer
+  # actually uses — symbol names, header parity, runtime behavior),
+  # and that the self-contained embedded `staticlib-rt` static library
+  # builds for a bare-metal target. This is the CI-enforced version of
+  # what was previously only a manual MSVC check.
+  # ----------------------------------------------------------------
+  capi_ffi:
+    name: capi C/C++ FFI + embedded staticlib
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: thumbv7em-none-eabihf
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: capi-ffi
+
+      - name: build desktop cdylib
+        run: cargo build -p forge-alloc-capi --release
+
+      - name: compile + run the C example against the shared library
+        run: |
+          cc crates/forge-alloc-capi/examples/bump_example.c \
+            -I crates/forge-alloc-capi/include \
+            -L target/release -lforge_alloc_capi \
+            -o "$RUNNER_TEMP/bump_c"
+          LD_LIBRARY_PATH=target/release "$RUNNER_TEMP/bump_c"
+
+      - name: compile + run the C++ example against the shared library
+        run: |
+          c++ crates/forge-alloc-capi/examples/bump_example.cpp \
+            -I crates/forge-alloc-capi/include \
+            -L target/release -lforge_alloc_capi \
+            -o "$RUNNER_TEMP/bump_cpp"
+          LD_LIBRARY_PATH=target/release "$RUNNER_TEMP/bump_cpp"
+
+      - name: build self-contained embedded staticlib (thumbv7em, no_std)
+        run: |
+          cargo build -p forge-alloc-capi --release \
+            --no-default-features --features staticlib-rt \
+            --target thumbv7em-none-eabihf
+
   # ----------------------------------------------------------------
   # Benchmark compile check. Verifies the `forge-bench` criterion
   # targets still COMPILE in the optimized `bench` profile. The
