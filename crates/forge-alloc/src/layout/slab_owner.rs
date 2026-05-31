@@ -546,6 +546,19 @@ unsafe impl<T, B: Allocator + forge_alloc_core::FixedRange> Allocator for SlabOw
         }
     }
 
+    #[inline]
+    unsafe fn usable_size(&self, ptr: NonNull<u8>, layout: NonZeroLayout) -> Option<usize> {
+        // Forward to the inner Slab, which reports the full slot stride — so an
+        // outer scrub wrapper (`PoisonOnFree`/`ZeroizeOnFree`) over a
+        // `SlabOwner` wipes the whole slot on free, not just the requested
+        // prefix. Mirrors the `capacity_bytes`/`corruption_events` forwards.
+        // SAFETY: !Sync — exclusive access; `ptr` came from the inner slab's
+        // allocate via this owner, and the caller upholds usable_size's
+        // contract.
+        let slab = unsafe { &*self.inner.slab.get() };
+        unsafe { slab.usable_size(ptr, layout) }
+    }
+
     fn capacity_bytes(&self) -> Option<usize> {
         // SAFETY: !Sync — exclusive access.
         let slab = unsafe { &*self.inner.slab.get() };
@@ -835,6 +848,24 @@ mod tests {
         let layout = NonZeroLayout::for_type::<u64>().unwrap();
         let p = owner.allocate(layout).unwrap();
         unsafe { owner.deallocate(p.cast(), layout) };
+    }
+
+    /// `usable_size` forwards to the inner Slab's full slot stride, so an outer
+    /// scrub wrapper wipes the whole slot. `SlabOwner<u8>` → 8-byte slots.
+    #[test]
+    fn usable_size_forwards_slot_stride() {
+        let owner: SlabOwner<u8, InlineBacked<512>> =
+            SlabOwner::new(8, InlineBacked::<512>::new()).unwrap();
+        let layout = NonZeroLayout::from_size_align(1, 1).unwrap();
+        let p = owner.allocate(layout).unwrap();
+        let ptr = p.cast::<u8>();
+        let us = unsafe { owner.usable_size(ptr, layout) };
+        assert_eq!(
+            us,
+            Some(8),
+            "usable_size must forward the inner slot stride"
+        );
+        unsafe { owner.deallocate(ptr, layout) };
     }
 
     #[test]
