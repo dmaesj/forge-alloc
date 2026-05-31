@@ -136,6 +136,15 @@ unsafe impl<I: Allocator> Allocator for SplitMetadata<I> {
     }
 
     #[inline]
+    unsafe fn usable_size(&self, ptr: NonNull<u8>, layout: NonZeroLayout) -> Option<usize> {
+        // Layout-transparent forwarder (data side): `allocate` returns the
+        // data region's block unchanged, so forward `usable_size` too — else an
+        // outer scrub wrapper over `SplitMetadata` would miss the slack tail.
+        // SAFETY: forwarded; caller upholds usable_size's contract on data.
+        unsafe { self.data_region.usable_size(ptr, layout) }
+    }
+
+    #[inline]
     fn capacity_bytes(&self) -> Option<usize> {
         self.data_region.capacity_bytes()
     }

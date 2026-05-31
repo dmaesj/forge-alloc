@@ -184,6 +184,18 @@ unsafe impl<I: Allocator, const EPOCHS: usize> Allocator for Quarantine<I, EPOCH
     }
 
     #[inline]
+    unsafe fn usable_size(&self, ptr: NonNull<u8>, layout: NonZeroLayout) -> Option<usize> {
+        // Layout-transparent forwarder: `allocate` returns the inner's block
+        // unchanged. Forwarding `usable_size` is REQUIRED for the documented
+        // `PoisonOnFree<Quarantine<..>>` / `ZeroizeOnFree<Quarantine<..>>`
+        // composition — without it the outer scrub wrapper sees `None`, falls
+        // back to `layout.size()`, and leaves the `[size, usable_size)` slack
+        // tail un-scrubbed (a freed-secret leak).
+        // SAFETY: forwarded; caller upholds usable_size's contract on inner.
+        unsafe { self.inner.usable_size(ptr, layout) }
+    }
+
+    #[inline]
     fn capacity_bytes(&self) -> Option<usize> {
         self.inner.capacity_bytes()
     }
@@ -338,22 +350,94 @@ mod tests {
     fn drop_drains_quarantine() {
         let s = Slab::<u64, InlineBacked<512>>::new(8, InlineBacked::<512>::new()).unwrap();
         let layout = NonZeroLayout::for_type::<u64>().unwrap();
-        // Construct Quarantine, free some slots, then drop without draining.
-        // Verify no double-frees by ensuring Drop completes without panic.
+        let a_addr;
+        let b_addr;
         {
             let q: Quarantine<&Slab<u64, InlineBacked<512>>, 8> = Quarantine::new(&s);
-            let a = q.allocate(layout).unwrap();
-            let b = q.allocate(layout).unwrap();
-            unsafe {
-                q.deallocate(a.cast(), layout);
-                q.deallocate(b.cast(), layout);
+            // Carve ALL 8 slab slots so the freelist is empty and the cursor is
+            // exhausted — then the ONLY way a post-drop allocate can succeed is
+            // via a slot the drain returned. (Previously this test left 6 slots
+            // uncarved, so it passed even if Drop drained nothing — vacuous.)
+            let a = q.allocate(layout).unwrap().cast::<u8>();
+            let b = q.allocate(layout).unwrap().cast::<u8>();
+            a_addr = a.as_ptr();
+            b_addr = b.as_ptr();
+            for _ in 0..6 {
+                let _ = q.allocate(layout).unwrap();
             }
-            // q drops here; quarantine should drain a and b back to slab.
+            // Quarantine a and b (EPOCHS=8 holds both, no eviction).
+            unsafe {
+                q.deallocate(a, layout);
+                q.deallocate(b, layout);
+            }
+            // q drops here → drain must return a and b to the slab freelist.
         }
-        // After q is dropped, slab should be reusable as if a/b were freed.
-        let c = s.allocate(layout).unwrap();
-        // c should be one of the originally-freed slots (Slab LIFO).
-        let _ = c;
+        // Slab is fully carved; this can only succeed from a drained slot. A
+        // no-op Drop would leave the slab exhausted and this would be Err.
+        let c = s
+            .allocate(layout)
+            .expect("Drop must have drained a slot back to the slab");
+        let c_addr = c.cast::<u8>().as_ptr();
+        assert!(
+            c_addr == a_addr || c_addr == b_addr,
+            "post-drop allocation must reuse a drained slot",
+        );
+    }
+
+    #[test]
+    fn epochs_one_evicts_immediately() {
+        // EPOCHS=1 is the degenerate ring: each deallocate evicts the
+        // previously-quarantined block (count % 1 == 0). After freeing `a`
+        // then `b`, `a` is already back on the freelist.
+        let q = build::<1>();
+        let layout = NonZeroLayout::for_type::<u64>().unwrap();
+        let a = q.allocate(layout).unwrap().cast::<u8>();
+        let b = q.allocate(layout).unwrap().cast::<u8>();
+        unsafe { q.deallocate(a, layout) }; // ring[0] = a, count=1
+        unsafe { q.deallocate(b, layout) }; // evicts a, ring[0] = b, count=2
+        let g = q.allocate(layout).unwrap().cast::<u8>();
+        assert_eq!(
+            a.as_ptr(),
+            g.as_ptr(),
+            "EPOCHS=1 should evict `a` immediately",
+        );
+    }
+
+    /// Minimal inner that reports `slack` extra usable bytes — proves
+    /// `Quarantine` forwards `usable_size`, the fix for the
+    /// `PoisonOnFree<Quarantine<..>>` slack-scrub leak. Without the forward
+    /// `q.usable_size` would be the trait-default `None`.
+    struct SlackReporting<I>(I, usize);
+    unsafe impl<I: Deallocator> Deallocator for SlackReporting<I> {
+        unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: NonZeroLayout) {
+            // SAFETY: forwarded.
+            unsafe { self.0.deallocate(ptr, layout) }
+        }
+    }
+    unsafe impl<I: Allocator> Allocator for SlackReporting<I> {
+        fn allocate(&self, layout: NonZeroLayout) -> Result<NonNull<[u8]>, AllocError> {
+            self.0.allocate(layout)
+        }
+        unsafe fn usable_size(&self, _ptr: NonNull<u8>, layout: NonZeroLayout) -> Option<usize> {
+            Some(layout.size().get() + self.1)
+        }
+    }
+
+    #[test]
+    fn forwards_usable_size_for_slack_scrub() {
+        let inner = SlackReporting(
+            Slab::<u64, InlineBacked<512>>::new(8, InlineBacked::<512>::new()).unwrap(),
+            16,
+        );
+        let q: Quarantine<_, 4> = Quarantine::new(inner);
+        let layout = NonZeroLayout::for_type::<u64>().unwrap();
+        let block = q.allocate(layout).unwrap();
+        let ptr = block.cast::<u8>();
+        // Quarantine must surface the inner's slack so an outer scrub wrapper
+        // wipes the whole usable extent; the trait default would be `None`.
+        let us = unsafe { q.usable_size(ptr, layout) };
+        assert_eq!(us, Some(layout.size().get() + 16));
+        unsafe { q.deallocate(ptr, layout) };
     }
 
     #[test]

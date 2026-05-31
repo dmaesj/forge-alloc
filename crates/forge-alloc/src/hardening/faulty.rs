@@ -351,4 +351,50 @@ mod tests {
         // Routed back to System on free (outside the primary's range).
         unsafe { wf.deallocate(p.cast(), layout()) };
     }
+
+    /// `grow` is inherited (default allocate-copy-free). Under a failing
+    /// policy the internal `self.allocate(new)` faults *before* the old block
+    /// is freed, so `grow` returns `Err` and the original allocation is left
+    /// intact — `Allocator::grow` contract item 5. Locks in the documented
+    /// "never reaches `I::grow`" routing.
+    #[test]
+    fn grow_under_failing_policy_preserves_old_block() {
+        let f: Faulty<BumpArena<InlineBacked<512>>, FailAfter> = Faulty::new(
+            BumpArena::new(InlineBacked::<512>::new()).unwrap(),
+            FailAfter::new(1),
+        );
+        let old = NonZeroLayout::from_size_align(16, 8).unwrap();
+        let new = NonZeroLayout::from_size_align(64, 8).unwrap();
+        let block = f.allocate(old).unwrap(); // call 1: ok
+        let ptr = block.cast::<u8>();
+        unsafe {
+            core::ptr::write_bytes(ptr.as_ptr(), 0x55, 16);
+            // call 2 (grow's internal allocate) faults ⇒ grow returns Err.
+            assert!(
+                f.grow(ptr, old, new).is_err(),
+                "grow must fail when the policy fails the new allocation",
+            );
+            // Old block untouched and still valid/deallocatable.
+            for i in 0..16 {
+                assert_eq!(*ptr.as_ptr().add(i), 0x55, "grow corrupted the old block");
+            }
+            f.deallocate(ptr, old);
+        }
+    }
+
+    /// `capacity_bytes` / `corruption_events` are forwarded to inner, not the
+    /// trait defaults (`None` / unforwarded `0`). A regression dropping a
+    /// forward would otherwise be silent.
+    #[test]
+    fn forwards_capacity_and_corruption_events() {
+        let f: Faulty<Slab<u64, InlineBacked<512>>, NeverFail> =
+            Faulty::new(Slab::new(2, InlineBacked::<512>::new()).unwrap(), NeverFail);
+        let bare = Slab::<u64, InlineBacked<512>>::new(2, InlineBacked::<512>::new()).unwrap();
+        assert_eq!(
+            f.capacity_bytes(),
+            bare.capacity_bytes(),
+            "capacity_bytes must forward to inner, not be None",
+        );
+        assert_eq!(f.corruption_events(), 0);
+    }
 }

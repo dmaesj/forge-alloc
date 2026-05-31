@@ -390,6 +390,16 @@ unsafe impl<I: Allocator> Allocator for Statistics<I> {
     }
 
     #[inline]
+    unsafe fn usable_size(&self, ptr: NonNull<u8>, layout: NonZeroLayout) -> Option<usize> {
+        // Layout-transparent forwarder: `allocate` returns the inner's block
+        // unchanged, so forward `usable_size` too — otherwise an outer scrub
+        // wrapper (`PoisonOnFree`/`ZeroizeOnFree`) over `Statistics` would see
+        // `None` and leave the slack tail un-scrubbed.
+        // SAFETY: forwarded; caller upholds usable_size's contract on inner.
+        unsafe { self.inner.usable_size(ptr, layout) }
+    }
+
+    #[inline]
     fn capacity_bytes(&self) -> Option<usize> {
         self.inner.capacity_bytes()
     }
