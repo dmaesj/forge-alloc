@@ -270,6 +270,22 @@ where
     }
 
     #[inline]
+    unsafe fn usable_size(&self, ptr: NonNull<u8>, layout: NonZeroLayout) -> Option<usize> {
+        // Route by provenance, exactly like `deallocate`: a primary-owned
+        // pointer's usable size comes from the primary, otherwise the
+        // secondary. Without this the wrapper would report `None` and an outer
+        // scrub wrapper would miss the slack of whichever half served the
+        // block.
+        if self.primary.contains(ptr) {
+            // SAFETY: ptr lies in primary's range → it came from primary.
+            unsafe { self.primary.usable_size(ptr, layout) }
+        } else {
+            // SAFETY: ptr is outside primary → it came from the secondary.
+            unsafe { self.secondary.usable_size(ptr, layout) }
+        }
+    }
+
+    #[inline]
     fn capacity_bytes(&self) -> Option<usize> {
         // Total isn't meaningfully defined here — the secondary may be
         // unbounded. Report just the primary's capacity for the watermark

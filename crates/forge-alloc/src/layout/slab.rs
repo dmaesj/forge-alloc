@@ -357,7 +357,12 @@ unsafe impl<T, B: Allocator + FixedRange, M: FreelistProtection> Deallocator for
     ///   `core::ptr::drop_in_place`) before calling `deallocate`. This method
     ///   overwrites the slot's bytes with a a `FreeLink`.
     /// - Passing the same `ptr` twice without an intervening `allocate` is a
-    ///   double-free and is UB.
+    ///   double-free and is UB. Note the freelist tripwire (`next_idx <=
+    ///   capacity`) does **not** catch this under `NoProtection`: a base-of-
+    ///   slot double-free makes the slot's `FreeLink` point at itself (an
+    ///   in-range index), so subsequent allocations alias the same live slot.
+    ///   Only a real `M` (e.g. `SipHashMAC`, which binds the link to the slot
+    ///   index) detects and disarms the self-cycle.
     #[inline]
     unsafe fn deallocate(&self, ptr: NonNull<u8>, _layout: NonZeroLayout) {
         // Layout sanity: an honest caller's layout fits within block_stride.
@@ -384,7 +389,16 @@ unsafe impl<T, B: Allocator + FixedRange, M: FreelistProtection> Deallocator for
         unsafe {
             let head_ptr = self.free_head.get();
             let old_head = *head_ptr; // 1-based; 0 means empty
-            let mac = self.mac.sign(old_head, ptr.as_ptr() as usize);
+                                      // Bind the MAC to the slot INDEX, not its absolute address. The
+                                      // index is move-invariant; the address is not — `InlineBacked` and
+                                      // other move-relative backings change every slot's address when the
+                                      // `Slab` is moved (the very reason `slot_ptr` re-derives through
+                                      // `&self`). Signing over `ptr.as_ptr()` here but verifying over the
+                                      // re-derived `slot_ptr(idx)` in `allocate` would spuriously fail for
+                                      // any slab moved between a free and a later alloc. The index is an
+                                      // equally strong nonce: it uniquely identifies the slot, so a link
+                                      // copied to a different slot still fails verification.
+            let mac = self.mac.sign(old_head, idx as usize);
             let link = FreeLink {
                 next_idx: old_head,
                 mac,
@@ -439,10 +453,11 @@ unsafe impl<T, B: Allocator + FixedRange, M: FreelistProtection> Allocator for S
                 let link = slot.cast::<FreeLink>().read();
                 // Verify MAC. On corruption, drop the link (don't propagate)
                 // and fall through to next_uncarved — defense-in-depth, the
-                // attacker's poisoned link is now disarmed.
+                // attacker's poisoned link is now disarmed. The nonce is the
+                // slot INDEX (move-invariant), matching `deallocate`'s `sign`.
                 let mac_ok = self
                     .mac
-                    .verify(link.next_idx, link.mac, slot as usize)
+                    .verify(link.next_idx, link.mac, slot_idx as usize)
                     .is_ok();
                 // Defense-in-depth: even with `NoProtection` (or a future MAC
                 // impl with a bug), reject a next_idx that would cause OOB
@@ -502,6 +517,22 @@ unsafe impl<T, B: Allocator + FixedRange, M: FreelistProtection> Allocator for S
                 self.block_stride,
             ))
         }
+    }
+
+    #[inline]
+    unsafe fn usable_size(&self, ptr: NonNull<u8>, _layout: NonZeroLayout) -> Option<usize> {
+        // Every slot is `block_stride` bytes, which can exceed the requested
+        // `layout.size()` (e.g. `Slab<u8>` → 8-byte slots). Report the true
+        // usable extent so an outer scrub wrapper (`PoisonOnFree`/
+        // `ZeroizeOnFree`) wipes the WHOLE slot on free, not just the requested
+        // prefix — otherwise the stride-slack tail keeps freed secret bytes.
+        // Contract `n >= layout.size()` holds: `allocate` rejects
+        // `req_size > block_stride`.
+        debug_assert!(
+            self.slot_index(ptr).is_some(),
+            "Slab::usable_size: pointer outside slab range",
+        );
+        Some(self.block_stride)
     }
 
     #[inline]
@@ -716,6 +747,21 @@ mod tests {
         assert_eq!(s.capacity(), 128);
         assert_eq!(s.block_stride(), 8);
         assert_eq!(s.capacity_bytes(), Some(1024));
+    }
+
+    /// `usable_size` reports the full slot stride, not the requested size, so
+    /// an outer `PoisonOnFree`/`ZeroizeOnFree` scrubs the whole slot on free.
+    /// `Slab<u8>` has a 1-byte type but an 8-byte stride (FreeLink floor).
+    #[test]
+    fn usable_size_reports_full_stride() {
+        let s: Slab<u8, InlineBacked<512>> = Slab::new(8, InlineBacked::<512>::new()).unwrap();
+        assert_eq!(s.block_stride(), 8);
+        let layout = NonZeroLayout::from_size_align(1, 1).unwrap();
+        let block = s.allocate(layout).unwrap();
+        let ptr = block.cast::<u8>();
+        let us = unsafe { s.usable_size(ptr, layout) };
+        assert_eq!(us, Some(8), "usable_size must report the full slot stride");
+        unsafe { s.deallocate(ptr, layout) };
     }
 
     #[test]
@@ -985,5 +1031,41 @@ mod tests {
         unsafe { s.deallocate(a.cast(), layout) };
         let b = s.allocate(layout).unwrap();
         assert_eq!(a.cast::<u8>().as_ptr(), b.cast::<u8>().as_ptr());
+    }
+
+    /// Regression: the freelist MAC must survive the slab being MOVED between a
+    /// free and a later alloc. `InlineBacked`'s storage is structure-relative,
+    /// so a move changes every slot's absolute address — the MAC nonce is the
+    /// slot INDEX (move-invariant). Were it the free-time absolute address (the
+    /// bug this guards), popping the freed slot after the move would false-fail
+    /// verification, bump `corruption_events`, leak the slot, and carve a fresh
+    /// one instead of reusing slot 0.
+    #[cfg(feature = "siphasher")]
+    #[test]
+    fn siphash_freelist_survives_move() {
+        use forge_alloc_core::SipHashMAC;
+        let s: Slab<u64, InlineBacked<1024>, SipHashMAC> = Slab::with_protection(
+            128,
+            InlineBacked::<1024>::new(),
+            SipHashMAC::with_key([0x99; 16]),
+        )
+        .unwrap();
+        let layout = NonZeroLayout::for_type::<u64>().unwrap();
+        let a = s.allocate(layout).unwrap();
+        assert_eq!(s.slot_index(a.cast()), Some(0));
+        unsafe { s.deallocate(a.cast(), layout) };
+        // Move the slab; the slot region relocates.
+        let moved = s;
+        let b = moved.allocate(layout).unwrap();
+        assert_eq!(
+            moved.corruption_events(),
+            0,
+            "freelist MAC must not false-fail across a move",
+        );
+        assert_eq!(
+            moved.slot_index(b.cast()),
+            Some(0),
+            "freed slot 0 must be reused, not abandoned to a false corruption",
+        );
     }
 }

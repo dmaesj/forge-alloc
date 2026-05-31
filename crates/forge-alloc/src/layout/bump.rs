@@ -331,6 +331,24 @@ mod tests {
         assert!(arena.allocate(one).is_err());
     }
 
+    /// Alignment padding must count toward exhaustion: the bounds check is on
+    /// the *aligned* offset + size, not the raw cursor + size. `InlineBacked`'s
+    /// base is 16-aligned, so after a 1-byte alloc (cursor = 1) a 16-aligned
+    /// request rounds the offset deterministically up to 16. A 56-byte request
+    /// then needs `16 + 56 = 72 > 64` and must fail — whereas a buggy check
+    /// using `cursor + size = 1 + 56 = 57 <= 64` would wrongly succeed.
+    #[test]
+    fn alignment_padding_counts_toward_exhaustion() {
+        let arena = BumpArena::new(InlineBacked::<64>::new()).unwrap();
+        let one = NonZeroLayout::from_size_align(1, 1).unwrap();
+        let _ = arena.allocate(one).unwrap(); // cursor = 1
+        let aligned = NonZeroLayout::from_size_align(56, 16).unwrap();
+        assert!(
+            arena.allocate(aligned).is_err(),
+            "alignment padding (offset 16) must be counted in the exhaustion check",
+        );
+    }
+
     #[test]
     fn reset_reclaims_all() {
         let mut arena = BumpArena::new(InlineBacked::<64>::new()).unwrap();

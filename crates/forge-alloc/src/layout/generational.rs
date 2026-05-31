@@ -54,14 +54,21 @@ impl GenerationInt for u64 {
 /// lifetime. A handle outliving its slab is allowed and gives `None` on
 /// access.
 ///
-/// # Generation wraparound — ABA-after-2^G-reuses
+/// # Generation wraparound — closed by slot retirement
 ///
 /// The generation counter increments on every `remove` of a slot and is
-/// `wrapping_add(1)` (per `GenerationInt`). After `2^G` reuses of the
-/// *same* slot, the counter returns to its original value — a stale
-/// `Handle` whose generation matches that original value will then be
-/// accepted as valid by `get`/`remove`, even though the slot now holds
-/// a different `T`. This is the classic ABA problem at a long horizon.
+/// `wrapping_add(1)` (per `GenerationInt`). Without mitigation, after `2^G`
+/// reuses of the *same* slot the counter would return to its original value
+/// and a stale `Handle` could be re-accepted against a different `T` (the
+/// classic ABA problem at a long horizon).
+///
+/// This is **defended, not merely documented**: when a slot's generation
+/// wraps a full cycle (the increment reaches `ZERO`), `remove` **retires**
+/// the slot — it is never returned to the freelist, so it can never be
+/// re-issued at a generation a stale handle holds. The cost is one leaked
+/// slot per full wrap of that slot (4.3 billion removes for `u32`, which is
+/// negligible). The choice between `u32` and `u64` is therefore now about how
+/// soon a hot slot is retired, not about a UAF window:
 ///
 /// - `G = u32` (default): wrap after **2^32 ≈ 4.3 billion** reuses of
 ///   the same slot. Realistic for long-running servers with high churn
@@ -256,9 +263,25 @@ impl<T, B: Allocator + FixedRange, G: GenerationInt> GenerationalSlab<T, B, G> {
         // optimizer should CSE, but folding the access ourselves avoids
         // relying on noalias deduction across the `self.free_head =
         // *next_free` write that sits between the two derefs.
+        // Defense-in-depth: `free_head` is only ever set from `remove` with an
+        // index in `0..len <= capacity`, so it cannot legitimately be out of
+        // range. Guard the one unchecked index path so a corrupted `free_head`
+        // can never cause an out-of-bounds slot deref (UB) — abandon the link
+        // and carve fresh instead. (Not reachable via the safe API today.)
+        if let Some(idx) = self.free_head {
+            if idx >= self.capacity {
+                debug_assert!(
+                    false,
+                    "GenerationalSlab: corrupt free_head {idx} >= capacity {}",
+                    self.capacity,
+                );
+                self.free_head = None;
+            }
+        }
         let (slot_idx, slot) = match self.free_head {
             Some(idx) => {
-                // SAFETY: idx came from our free_head, set by remove().
+                // SAFETY: idx came from our free_head (set by remove), and the
+                // guard above ensured idx < capacity, so the slot is in bounds.
                 let slot = unsafe { &mut *self.slots().as_ptr().add(idx as usize) };
                 match &slot.state {
                     SlotState::Free { next_free } => {
@@ -348,16 +371,33 @@ impl<T, B: Allocator + FixedRange, G: GenerationInt> GenerationalSlab<T, B, G> {
         if slot.generation != handle.generation {
             return None;
         }
-        // Swap in a Free state and extract the prior value.
-        let prior = core::mem::replace(
-            &mut slot.state,
-            SlotState::Free {
-                next_free: self.free_head,
-            },
-        );
-        self.free_head = Some(handle.index);
-        // Bump generation — old handle is now stale.
-        slot.generation = slot.generation.wrapping_inc();
+        // Bump the generation so the old handle is now stale. `wrapping_inc`
+        // reaches `ZERO` only from the type's max value, so `next == ZERO`
+        // means this slot just completed a full 2^bits cycle.
+        let next_gen = slot.generation.wrapping_inc();
+        slot.generation = next_gen;
+        let prior = if next_gen == G::ZERO {
+            // The generation wrapped. Returning the slot to the freelist now
+            // would let it be reused at generation 0 (and onward), which is
+            // exactly when a stale handle minted earlier in the cycle would
+            // re-validate against a different `T` — the ABA / UAF this type
+            // exists to prevent. RETIRE the slot instead: extract the value
+            // but leave it OFF the freelist (a tombstone), so it is never
+            // handed out again. Costs one slot per full wrap (4.3B removes for
+            // `u32`) — negligible — and closes the wraparound window entirely
+            // rather than merely documenting it.
+            core::mem::replace(&mut slot.state, SlotState::Free { next_free: None })
+        } else {
+            // Normal path: link the slot onto the freelist for reuse.
+            let prior = core::mem::replace(
+                &mut slot.state,
+                SlotState::Free {
+                    next_free: self.free_head,
+                },
+            );
+            self.free_head = Some(handle.index);
+            prior
+        };
         match prior {
             SlotState::Occupied(v) => Some(v),
             SlotState::Free { .. } => None, // can't happen; we checked above
@@ -368,6 +408,16 @@ impl<T, B: Allocator + FixedRange, G: GenerationInt> GenerationalSlab<T, B, G> {
     #[inline]
     pub fn contains(&self, handle: Handle<T, G>) -> bool {
         self.get(handle).is_some()
+    }
+
+    /// Test-only: force a live slot's generation, so the wraparound-retirement
+    /// path can be reached without 2^bits real removes.
+    #[cfg(test)]
+    fn force_generation(&mut self, index: u32, generation: G) {
+        assert!(index < self.capacity);
+        // SAFETY: index < capacity; slot is initialized.
+        let slot = unsafe { &mut *self.slots().as_ptr().add(index as usize) };
+        slot.generation = generation;
     }
 }
 
@@ -498,6 +548,33 @@ mod tests {
             GenerationalSlab::new(16, InlineBacked::<1024>::new()).unwrap();
         let h = s.insert(42).unwrap();
         assert_eq!(s.get(h), Some(&42));
+    }
+
+    /// A slot whose generation wraps a full cycle on `remove` must be RETIRED
+    /// (never returned to the freelist), closing the ABA/UAF window. With a
+    /// capacity-2 slab: slot 0 is forced to `u32::MAX`, removed (→ wraps →
+    /// retired), then the slab can only ever hand out slot 1 — a third insert
+    /// must OOM rather than reuse the retired slot 0.
+    #[test]
+    fn wrapped_generation_slot_is_retired() {
+        let mut s: GenerationalSlab<u64, InlineBacked<1024>> =
+            GenerationalSlab::with_generation(2, InlineBacked::<1024>::new()).unwrap();
+        // Force slot 0 (carved by the first insert) to MAX *before* inserting,
+        // so the handle is minted at MAX and the matching `remove` wraps to 0.
+        s.force_generation(0, u32::MAX);
+        let a = s.insert(1).unwrap();
+        assert_eq!(a.index, 0);
+        assert_eq!(a.generation, u32::MAX);
+        assert_eq!(s.remove(a), Some(1)); // gen matches → wraps → retires slot 0
+                                          // Slot 0 retired. The fresh carve gives slot 1; a third insert OOMs
+                                          // because slot 0 is off the freelist (without retirement it would be
+                                          // reused and `c` below would succeed at index 0).
+        let b = s.insert(2).unwrap();
+        assert_eq!(b.index, 1, "retired slot 0 must not be reused");
+        assert!(
+            s.insert(3).is_err(),
+            "retired slot must stay out of circulation (no reuse)",
+        );
     }
 
     #[test]

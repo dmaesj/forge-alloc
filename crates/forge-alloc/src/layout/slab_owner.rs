@@ -1326,8 +1326,9 @@ mod tests {
     #[test]
     #[cfg_attr(miri, ignore = "miri-incompatible: mmap / threads")]
     fn adaptive_multi_threaded_stress() {
+        use std::collections::VecDeque;
         use std::sync::atomic::{AtomicBool, Ordering};
-        use std::sync::Arc;
+        use std::sync::{Arc, Mutex};
         use std::thread;
 
         const CAP: usize = 1024;
@@ -1341,45 +1342,65 @@ mod tests {
         .unwrap();
         let layout = NonZeroLayout::for_type::<u64>().unwrap();
 
-        // Allocate a pool the owner can hand to remotes.
-        let pool: Vec<_> = (0..256).map(|_| owner.allocate(layout).unwrap()).collect();
-        let addrs: Vec<usize> = pool
-            .iter()
-            .map(|p| p.cast::<u8>().as_ptr() as usize)
-            .collect();
-
-        // Verify pool has unique addresses (sanity).
-        let mut sorted = addrs.clone();
-        sorted.sort();
-        for w in sorted.windows(2) {
-            assert_ne!(w[0], w[1], "owner returned duplicate pointer");
-        }
-
+        // Producer-consumer cycle so every address is remote-freed exactly
+        // ONCE per allocation (the previous version re-freed a fixed pool
+        // thousands of times — a wholesale double-free that exercised UB
+        // rather than the adaptive path). The owner allocates LIVE blocks and
+        // publishes their addresses to a shared work queue; remote workers pop
+        // and remote-free them; the owner drains to reclaim the slots and
+        // re-allocates. A slot only becomes allocatable again after it has been
+        // remote-freed and drained, so the owner never re-issues a live slot —
+        // no address is freed twice without an intervening allocate.
+        let work: Arc<Mutex<VecDeque<usize>>> = Arc::new(Mutex::new(VecDeque::new()));
         let stop = Arc::new(AtomicBool::new(false));
+
         let mut handles = Vec::new();
-        for chunk in addrs.chunks(64) {
-            let chunk = chunk.to_vec();
+        for _ in 0..4 {
             let remote = owner.remote();
             let stop = Arc::clone(&stop);
+            let work = Arc::clone(&work);
             handles.push(thread::spawn(move || {
-                let mut iters = 0u64;
-                while !stop.load(Ordering::Relaxed) && iters < 4_000 {
-                    for &addr in &chunk {
-                        let p = unsafe { NonNull::new_unchecked(addr as *mut u8) };
-                        let _ = unsafe { remote.try_deallocate(p, layout) };
+                while !stop.load(Ordering::Relaxed) {
+                    let addr = work.lock().unwrap().pop_front();
+                    let Some(addr) = addr else {
+                        thread::yield_now();
+                        continue;
+                    };
+                    let p = unsafe { NonNull::new_unchecked(addr as *mut u8) };
+                    // Retry until the bounded remote queue accepts it (the
+                    // owner drains it concurrently). Each `addr` was a live
+                    // owner-issued slot, so this frees it exactly once.
+                    loop {
+                        if unsafe { remote.try_deallocate(p, layout) }.is_ok() {
+                            break;
+                        }
+                        if stop.load(Ordering::Relaxed) {
+                            break;
+                        }
+                        thread::yield_now();
                     }
-                    iters += 1;
                 }
             }));
         }
 
-        // Owner runs its own alloc/free loop to exercise the maybe_drain
-        // adaptive path under contention. Track whether the threshold
-        // moves off the initial value of 64.
+        // Owner loop: reclaim remote frees, allocate a fresh batch of LIVE
+        // slots, hand their addresses to the workers. Track whether the
+        // adaptive threshold moves off its initial value of 64.
         let mut saw_step = false;
-        for _ in 0..2_000 {
-            if let Ok(block) = owner.allocate(layout) {
-                unsafe { owner.deallocate(block.cast(), layout) };
+        let mut live = Vec::new();
+        for _ in 0..3_000 {
+            owner.drain();
+            for _ in 0..16 {
+                match owner.allocate(layout) {
+                    Ok(block) => live.push(block.cast::<u8>().as_ptr() as usize),
+                    Err(_) => break, // slab full — workers will free some
+                }
+            }
+            if !live.is_empty() {
+                let mut q = work.lock().unwrap();
+                for addr in live.drain(..) {
+                    q.push_back(addr);
+                }
             }
             if let Some(t) = owner.adaptive_threshold_snapshot() {
                 if t != 64 {

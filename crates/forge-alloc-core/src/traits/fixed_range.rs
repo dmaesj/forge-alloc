@@ -33,9 +33,21 @@ use super::non_zero_layout::AllocError;
 /// pointer-provenance routing in `WithFallback`.
 pub trait FixedRange {
     /// First byte of the owned address range.
+    ///
+    /// **Concurrency contract:** `base` (and [`size`](Self::size)) must be
+    /// callable concurrently from multiple threads through a shared `&self`
+    /// without data races — i.e. they must not mutate through `&self`. A
+    /// thread-safe consumer such as `SharedBumpArena` relies on this to be
+    /// `Sync` while its backing is merely `Send` (not `Sync`): it only ever
+    /// calls `base()`/`size()` on the shared backing, never an interior-
+    /// mutating method. All in-tree backings satisfy this (these are pure
+    /// reads of an immutable field).
     fn base(&self) -> NonNull<u8>;
 
     /// Length in bytes of the owned address range.
+    ///
+    /// Subject to the same concurrency contract as [`base`](Self::base): must
+    /// be data-race-free when called through a shared `&self`.
     fn size(&self) -> usize;
 
     /// Ensure the bytes `[offset, offset + len)` (relative to

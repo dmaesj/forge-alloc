@@ -234,9 +234,16 @@ impl<B: FixedRange> FixedRange for SharedBumpArena<B> {
     }
 }
 
-// SharedBumpArena is Send + Sync when B: Send. AtomicUsize is Sync; NonNull
-// is !Send by default but the mapping it points to is Send-safe (we never
-// re-assign base after construction).
+// `SharedBumpArena<B>` holds only `B`, a `usize` (capacity), and an
+// `AtomicUsize` (cursor) — no raw `NonNull`/`base` field; the base is
+// re-queried from `self.backing.base()` on every access (the move-safety fix).
+// `AtomicUsize` is `Sync`, so the marker impls are sound given `B: Send` PLUS
+// the requirement that `FixedRange::base`/`size` are callable concurrently
+// through a shared `&self` without data races (which lets `B` be `!Sync`, e.g.
+// `InlineBacked`). Every current backing satisfies this — `base()`/`size()`
+// are pure reads of an immutable field. A future `FixedRange` impl that
+// mutated through `&self` in `base()`/`size()` would make this `Sync` unsound;
+// the trait documents that requirement.
 unsafe impl<B: FixedRange + Send> Send for SharedBumpArena<B> {}
 unsafe impl<B: FixedRange + Send> Sync for SharedBumpArena<B> {}
 

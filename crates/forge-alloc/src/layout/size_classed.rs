@@ -520,6 +520,22 @@ unsafe impl<B: Allocator + FixedRange, const CLASSES: usize> Allocator for SizeC
         self.backing.allocate(layout)
     }
 
+    #[inline]
+    unsafe fn usable_size(&self, ptr: NonNull<u8>, layout: NonZeroLayout) -> Option<usize> {
+        // A class-routed allocation occupies a full class slot, which can far
+        // exceed `layout.size()` (a 5-byte request → 8-byte slot). Report the
+        // class slot size so an outer scrub wrapper (`PoisonOnFree`/
+        // `ZeroizeOnFree`) wipes the whole slot on free, not just the requested
+        // prefix. Fallback allocations forward to the backing. Routed by
+        // provenance (same as `deallocate`), so `n >= layout.size()` holds:
+        // `pick_class` always chose a class with stride >= the request.
+        match self.route_dealloc(ptr) {
+            Some(i) => Some(self.class_sizes[i]),
+            // SAFETY: a fallback ptr came from `backing.allocate(layout)`.
+            None => unsafe { self.backing.usable_size(ptr, layout) },
+        }
+    }
+
     fn capacity_bytes(&self) -> Option<usize> {
         // Sum across classes; fallback's capacity is not included
         // because it may be unbounded.
@@ -770,5 +786,22 @@ mod tests {
         // = 32 + 64 + 128 + 256 = 480
         let expected = (8 + 16 + 32 + 64) * 4usize;
         assert_eq!(sc.capacity_bytes(), Some(expected));
+    }
+
+    /// `usable_size` reports the class slot size, not the requested size, so an
+    /// outer scrub wrapper wipes the whole class-rounded slot on free. A 5-byte
+    /// request routes to the 8-byte class. (Uses the mmap-backed helper because
+    /// the 64-byte class needs 64-byte alignment, beyond `InlineBacked`'s
+    /// `MAX_ALIGN`.)
+    #[test]
+    #[cfg_attr(miri, ignore = "miri-incompatible: mmap / threads")]
+    fn usable_size_reports_class_size() {
+        let sc = build_mmap();
+        let layout = NonZeroLayout::from_size_align(5, 1).unwrap();
+        let block = sc.allocate(layout).unwrap();
+        let ptr = block.cast::<u8>();
+        let us = unsafe { sc.usable_size(ptr, layout) };
+        assert_eq!(us, Some(8), "usable_size must report the class slot size");
+        unsafe { sc.deallocate(ptr, layout) };
     }
 }
