@@ -175,6 +175,16 @@ unsafe impl<I: OsBacked> Allocator for GuardPage<I> {
         // backing region, not a wrappable allocator; no forward needed.
         0
     }
+
+    // No `usable_size` override — it correctly defaults to `None`. GuardPage is
+    // its own bump allocator over the guarded middle region and hands back
+    // exactly `layout.size()` bytes with no rounding slack, so an outer scrub
+    // wrapper's `unwrap_or(layout.size())` fallback already scrubs the precise
+    // extent. (Contrast `HugePageAligned`, which is size-transparent over an
+    // inner that may report slack and therefore *does* forward usable_size; and
+    // `Canary`, which hands back a sub-slice and must withhold. GuardPage is in
+    // the third category: it owns the allocation and reports nothing because
+    // there is nothing extra to report.)
 }
 
 impl<I: OsBacked> FixedRange for GuardPage<I> {

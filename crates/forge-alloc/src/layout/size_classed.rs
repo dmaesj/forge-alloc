@@ -214,7 +214,7 @@ impl UntypedSlab {
 /// `!Sync` — concurrent allocate would race on the per-class
 /// `free_head` / `next_uncarved` cells.
 ///
-/// **Reset is unsupported:** like [`Slab`], `SizeClassed` does not implement
+/// **Reset is unsupported:** like [`Slab`](crate::Slab), `SizeClassed` does not implement
 /// `Allocator::reset` (it returns the default `Err`). Bulk reclaim is via
 /// `Drop` (rebuild the allocator); there is no in-place "empty all classes"
 /// operation. Do not reset the backing arena out-of-band — the per-class

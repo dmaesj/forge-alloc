@@ -1444,6 +1444,17 @@ mod tests {
             let _ = h.join();
         }
         owner.drain();
+        // The invariant that actually matters: after a full produce/remote-
+        // free/drain cycle across threads, the freelist must be uncorrupted.
+        // A real double-free or freelist-link regression would trip the slab's
+        // MAC/tripwire and bump this counter — assert it explicitly (the
+        // previous version of this test checked only `saw_step`, so a genuine
+        // corruption could have slipped through).
+        assert_eq!(
+            owner.corruption_events(),
+            0,
+            "remote-free/drain cycle must not corrupt the freelist",
+        );
         assert!(
             saw_step,
             "Adaptive policy should have moved the threshold off 64 under contention",

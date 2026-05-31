@@ -357,12 +357,21 @@ unsafe impl<T, B: Allocator + FixedRange, M: FreelistProtection> Deallocator for
     ///   `core::ptr::drop_in_place`) before calling `deallocate`. This method
     ///   overwrites the slot's bytes with a a `FreeLink`.
     /// - Passing the same `ptr` twice without an intervening `allocate` is a
-    ///   double-free and is UB. Note the freelist tripwire (`next_idx <=
-    ///   capacity`) does **not** catch this under `NoProtection`: a base-of-
-    ///   slot double-free makes the slot's `FreeLink` point at itself (an
-    ///   in-range index), so subsequent allocations alias the same live slot.
-    ///   Only a real `M` (e.g. `SipHashMAC`, which binds the link to the slot
-    ///   index) detects and disarms the self-cycle.
+    ///   double-free and is UB. **No protection level — including
+    ///   `SipHashMAC` — detects a base-of-slot double-free.** The tripwire
+    ///   (`next_idx <= capacity`) does not catch it: the second free rewrites
+    ///   the slot's own `FreeLink` to point at the still-live head (an in-range
+    ///   index), so later allocations alias the same live slot. `SipHashMAC`
+    ///   does not catch it either, because the MAC binds a link to *its own
+    ///   slot index*: the second free re-signs a perfectly valid MAC for that
+    ///   same index in place, which then verifies on pop. The MAC's protection
+    ///   is against a link *forged or relocated to a different slot* (and the
+    ///   move-safety false-fail the index nonce fixes) — not an in-place
+    ///   re-sign. Detecting double-free needs orthogonal per-slot state (a
+    ///   live/free bit, a generation tag — see
+    ///   [`GenerationalSlab`](crate::GenerationalSlab), or a
+    ///   [`Quarantine`](crate::Quarantine) layer), which this slab does not
+    ///   carry by design.
     #[inline]
     unsafe fn deallocate(&self, ptr: NonNull<u8>, _layout: NonZeroLayout) {
         // Layout sanity: an honest caller's layout fits within block_stride.

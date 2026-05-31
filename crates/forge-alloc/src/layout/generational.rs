@@ -288,7 +288,14 @@ impl<T, B: Allocator + FixedRange, G: GenerationInt> GenerationalSlab<T, B, G> {
                         self.free_head = *next_free;
                     }
                     SlotState::Occupied(_) => {
-                        // Inconsistent state — should never happen.
+                        // Inconsistent state — the free list pointed at an
+                        // occupied slot. Not reachable via the safe API; signal
+                        // it in debug (mirroring the corrupt-`free_head` guard
+                        // above) rather than silently masquerading as OOM.
+                        debug_assert!(
+                            false,
+                            "GenerationalSlab: free_head {idx} points at an occupied slot",
+                        );
                         return Err(AllocError);
                     }
                 }

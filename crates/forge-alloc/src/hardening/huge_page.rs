@@ -164,6 +164,25 @@ unsafe impl<I: OsBacked> Allocator for HugePageAligned<I> {
     fn corruption_events(&self) -> u64 {
         self.inner.corruption_events()
     }
+
+    #[inline]
+    unsafe fn usable_size(&self, ptr: NonNull<u8>, layout: NonZeroLayout) -> Option<usize> {
+        // HugePageAligned inflates ALIGNMENT only, not size: `allocate` returns
+        // the inner pointer verbatim (no header/footer), so the user region is
+        // exactly the inner region. This wrapper is therefore size-TRANSPARENT
+        // and must FORWARD usable_size — NOT withhold it. Withholding (the
+        // trait default `None`) would make an outer scrub wrapper
+        // (`PoisonOnFree`/`ZeroizeOnFree`) scrub only `layout.size()` and leak
+        // any rounding slack the inner reports at `ptr`. Forward with the SAME
+        // inflated layout `allocate`/`deallocate` use, so the inner sees a
+        // consistent layout. (Distinct from layout-INFLATING wrappers like
+        // `Canary`/`GuardPage`, which hand back a sub-slice and correctly
+        // withhold usable_size.)
+        let inflated = self.promote_layout(layout).ok()?;
+        // SAFETY: `ptr` came from this wrapper's `allocate`, which called
+        // `inner.allocate(inflated)` and returned the inner pointer unchanged.
+        unsafe { self.inner.usable_size(ptr, inflated) }
+    }
 }
 
 unsafe impl<I: OsBacked> OsBacked for HugePageAligned<I> {
@@ -264,6 +283,75 @@ pub fn default_huge_page_size() -> usize {
 mod tests {
     use super::*;
     use crate::backing::MmapBacked;
+    use core::cell::Cell;
+
+    /// A mock `OsBacked` that records the layout passed to `usable_size` and
+    /// returns a sentinel — lets us prove `HugePageAligned` FORWARDS
+    /// usable_size with the INFLATED layout rather than withholding it.
+    /// Touches no real memory, so it runs under Miri.
+    struct RecordingBacked {
+        last_size: Cell<usize>,
+        last_align: Cell<usize>,
+    }
+    impl RecordingBacked {
+        fn new() -> Self {
+            Self {
+                last_size: Cell::new(0),
+                last_align: Cell::new(0),
+            }
+        }
+    }
+    unsafe impl Deallocator for RecordingBacked {
+        unsafe fn deallocate(&self, _ptr: NonNull<u8>, _layout: NonZeroLayout) {}
+    }
+    unsafe impl Allocator for RecordingBacked {
+        fn allocate(&self, _layout: NonZeroLayout) -> Result<NonNull<[u8]>, AllocError> {
+            Err(AllocError)
+        }
+        unsafe fn usable_size(&self, _ptr: NonNull<u8>, layout: NonZeroLayout) -> Option<usize> {
+            self.last_size.set(layout.size().get());
+            self.last_align.set(layout.align().get());
+            Some(0xC0DE)
+        }
+    }
+    unsafe impl OsBacked for RecordingBacked {
+        fn base_ptr(&self) -> NonNull<u8> {
+            NonNull::dangling()
+        }
+        fn region_size(&self) -> usize {
+            0
+        }
+        unsafe fn release_pages(&self, _ptr: NonNull<u8>, _size: usize) {}
+        unsafe fn protect(&self, _ptr: NonNull<u8>, _size: usize, _flags: ProtectFlags) {}
+    }
+
+    #[test]
+    fn usable_size_forwards_with_inflated_layout() {
+        // HugePageAligned inflates ALIGNMENT only (size-transparent), so it must
+        // forward usable_size — withholding would make an outer scrub wrapper
+        // under-scrub the inner's slack. Pin the forward AND that the inner sees
+        // the inflated alignment (matching allocate/deallocate), not None.
+        let mock = RecordingBacked::new();
+        let hp = HugePageAligned::with_huge_page_size(mock, 2 * 1024 * 1024).expect("valid params");
+        let layout = NonZeroLayout::from_size_align(1024, 8).unwrap();
+        // ptr is never dereferenced by the mock.
+        let got = unsafe { hp.usable_size(NonNull::<u8>::dangling(), layout) };
+        assert_eq!(
+            got,
+            Some(0xC0DE),
+            "usable_size must forward to the inner, not return None"
+        );
+        assert_eq!(
+            hp.inner().last_align.get(),
+            2 * 1024 * 1024,
+            "inner must see the INFLATED alignment, matching allocate/deallocate",
+        );
+        assert_eq!(
+            hp.inner().last_size.get(),
+            1024,
+            "size is unchanged (alignment-only inflation)",
+        );
+    }
 
     #[test]
     #[cfg_attr(miri, ignore = "miri-incompatible: mmap / threads")]
