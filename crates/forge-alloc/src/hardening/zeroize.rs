@@ -1,20 +1,23 @@
-//! `ZeroizeOnFree<I>` — volatile-zeroes freed memory so secret material cannot
-//! be recovered, and so the zeroing cannot be optimized away.
+//! `ZeroizeOnFree<I>` — volatile-zeroes freed memory so the zeroing cannot be
+//! optimized away, making freed secret material much harder to recover.
 //!
 //! This is the crypto-grade counterpart to [`PoisonOnFree`](crate::hardening::PoisonOnFree).
 //! Where `PoisonOnFree` writes a configurable byte with a plain
 //! `write_bytes` — which the compiler may **dead-store-eliminate** once it
 //! proves the block is freed and never read again — `ZeroizeOnFree` writes
-//! zeroes through [`core::ptr::write_volatile`] followed by a
-//! [`compiler_fence`](core::sync::atomic::compiler_fence). Volatile accesses
-//! must occur per the abstract machine, so the scrub survives optimization;
-//! the fence keeps it from being reordered past a subsequent read. This is the
-//! same guarantee C's `memset_s` / `explicit_bzero` and the `zeroize` crate
-//! provide, with no external dependency.
+//! zeroes through [`core::ptr::write_volatile`]. Volatile accesses are
+//! observable side effects on the abstract machine, so the optimizer may not
+//! drop them as dead stores — *that, alone, is the non-elision guarantee*, the
+//! same mechanism C's `memset_s` / `explicit_bzero` and the `zeroize` crate
+//! rely on, with no external dependency. A trailing
+//! [`compiler_fence`](core::sync::atomic::compiler_fence) is a defensive
+//! compile-time barrier; it emits no CPU fence and does not order the volatile
+//! stores against a later non-volatile read.
 //!
 //! For secret material (keys, plaintext-before-encryption, tokens) prefer this
 //! over `PoisonOnFree<_>` with a zero pattern: it is strictly stronger because
-//! the write cannot be elided.
+//! the write cannot be elided. Note the same freelist-link caveat as
+//! `PoisonOnFree` applies — see the type docs on composition order.
 //!
 //! See `docs/ARCHITECTURE.md` for the composable-wrapper design.
 
@@ -27,8 +30,13 @@ use forge_alloc_core::{AllocError, Allocator, Deallocator, FixedRange, NonZeroLa
 ///
 /// Byte-wise volatile writes (the `zeroize`-crate / `explicit_bzero` approach):
 /// each write is observable on the abstract machine, so the optimizer may not
-/// drop it as a dead store. The trailing `compiler_fence(SeqCst)` prevents the
-/// writes from being reordered after a later access to the same region.
+/// drop it as a dead store — this is the whole non-elision guarantee.
+/// Byte-wise (not word-wise) keeps it correct at any alignment; `ptr` may be
+/// only byte-aligned. The trailing `compiler_fence(SeqCst)` is a defensive
+/// compile-time barrier: it pins the scrub ahead of later compiler-visible
+/// accesses in program order, but emits no CPU barrier and does not order the
+/// volatile stores against a later non-volatile read. Non-elision does not
+/// depend on it.
 ///
 /// # Safety
 ///
@@ -118,6 +126,24 @@ unsafe impl<I: Allocator> Allocator for ZeroizeOnFree<I> {
     // docs. The trait defaults allocate-copy-then-`self.deallocate(old)`, which
     // routes the moved-from block through this wrapper's zeroizing deallocate.
 
+    /// Bulk-reclaim the inner allocator (arenas only).
+    ///
+    /// **This does not scrub.** `reset` forwards the inner's cursor reclaim; it
+    /// does *not* zeroize the previously-issued bytes — those are erased only by
+    /// the per-block `deallocate` path, or overwritten by a later `allocate`.
+    /// For guaranteed erasure of secret material, free blocks individually
+    /// rather than resetting.
+    #[inline]
+    fn reset(&mut self) -> Result<(), AllocError> {
+        self.inner.reset()
+    }
+
+    #[inline]
+    unsafe fn usable_size(&self, ptr: NonNull<u8>, layout: NonZeroLayout) -> Option<usize> {
+        // SAFETY: forwarded; caller upholds usable_size's contract on inner.
+        unsafe { self.inner.usable_size(ptr, layout) }
+    }
+
     #[inline]
     fn capacity_bytes(&self) -> Option<usize> {
         self.inner.capacity_bytes()
@@ -190,8 +216,11 @@ mod tests {
             core::ptr::write_bytes(old_ptr.as_ptr(), 0xAA, 16);
             let grown = z.grow(old_ptr, old, new).unwrap();
             let new_ptr = grown.cast::<u8>();
-            // BumpArena moves on grow (cursor advances), so the addresses differ
-            // and the old region is no longer in use — readable in this test.
+            // Relies on BumpArena NOT implementing an in-place `grow`: it uses
+            // the trait default (allocate-copy-free), so the cursor advances and
+            // the addresses differ, leaving the old region unused and readable
+            // in this test. If BumpArena ever grows in place this assertion (and
+            // the moved-from read below) would no longer apply.
             assert_ne!(old_ptr.as_ptr(), new_ptr.as_ptr());
             for i in 0..16 {
                 assert_eq!(
@@ -210,5 +239,19 @@ mod tests {
         let z = ZeroizeOnFree::new(InlineBacked::<64>::new());
         // FixedRange passthrough reaches the inner backing.
         assert_eq!(z.size(), 64);
+    }
+
+    /// `reset` must forward to the inner arena (not the default `Err`), so a
+    /// wrapped bump arena stays resettable — regression guard for the
+    /// usable_size/reset forwarding.
+    #[test]
+    fn reset_forwards_to_inner_arena() {
+        let mut z: ZeroizeOnFree<BumpArena<InlineBacked<256>>> =
+            ZeroizeOnFree::new(BumpArena::new(InlineBacked::<256>::new()).unwrap());
+        let layout = NonZeroLayout::from_size_align(16, 8).unwrap();
+        let _ = z.allocate(layout).unwrap();
+        assert!(z.inner().allocated() > 0);
+        assert!(z.reset().is_ok(), "wrapped arena must be resettable");
+        assert_eq!(z.inner().allocated(), 0);
     }
 }

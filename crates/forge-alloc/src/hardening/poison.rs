@@ -168,6 +168,22 @@ unsafe impl<I: Allocator> Allocator for PoisonOnFree<I> {
         unsafe { self.inner.shrink(ptr, old, new) }
     }
 
+    /// Bulk-reclaim the inner allocator (arenas only). Forwards the inner's
+    /// cursor reclaim; it does **not** poison the previously-issued bytes —
+    /// those are overwritten on the per-block `deallocate` path or by a later
+    /// `allocate`. Without this forward a wrapped `BumpArena` could not be
+    /// reset at all (the trait default returns `Err`).
+    #[inline]
+    fn reset(&mut self) -> Result<(), AllocError> {
+        self.inner.reset()
+    }
+
+    #[inline]
+    unsafe fn usable_size(&self, ptr: NonNull<u8>, layout: NonZeroLayout) -> Option<usize> {
+        // SAFETY: forwarded; caller upholds usable_size's contract on inner.
+        unsafe { self.inner.usable_size(ptr, layout) }
+    }
+
     #[inline]
     fn capacity_bytes(&self) -> Option<usize> {
         self.inner.capacity_bytes()
