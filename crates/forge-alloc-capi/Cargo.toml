@@ -1,0 +1,38 @@
+[package]
+name        = "forge-alloc-capi"
+version     = "0.1.0"
+description = "C ABI for forge-alloc — a hardened bump allocator over a caller-provided buffer, for embedded C/C++"
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+repository.workspace   = true
+readme      = "README.md"
+keywords    = ["allocator", "ffi", "no-std", "embedded", "c-api"]
+categories  = ["memory-management", "no-std", "external-ffi-bindings"]
+# Provisional ABI; not published yet. Flip to publishable once the C
+# surface has stabilized and had external use.
+publish     = false
+
+[lib]
+# `lib` so the Rust integration tests can link the crate; `staticlib` for
+# embedded firmware (linked into the final image, which supplies the
+# panic handler); `cdylib` for desktop C/C++ that links/loads a shared
+# object.
+crate-type = ["lib", "staticlib", "cdylib"]
+
+[features]
+default = ["std"]
+# `std` lets the desktop `cdylib` pull a panic handler + allocator from std.
+std = ["forge-alloc/std"]
+# Self-contained `no_std` staticlib for a PURE C/C++ firmware image: provides a
+# `#[panic_handler]` and a (never-called) `#[global_allocator]` so the Rust
+# `staticlib` links on its own. Build `--no-default-features --features
+# staticlib-rt`. Do NOT enable when a Rust `no_std` consumer links the rlib and
+# already supplies these lang items (that would collide).
+staticlib-rt = []
+
+[dependencies]
+forge-alloc = { version = "0.3.3", path = "../forge-alloc", default-features = false }
+
+[lints]
+workspace = true

@@ -326,6 +326,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "forge-alloc-capi"
+version = "0.1.0"
+dependencies = [
+ "forge-alloc",
+]
+
+[[package]]
 name = "forge-alloc-core"
 version = "0.2.2"
 dependencies = [

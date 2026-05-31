@@ -26,6 +26,7 @@ a per-release summary lives in [`CHANGELOG.md`](https://github.com/dmaesj/forge-
 |---|---|
 | `forge-alloc` | The library — Layer 1 backings, Layer 2 layout primitives, and Layer 3 hardening wrappers, plus the trait re-exports. **This is the crate to depend on.** |
 | `forge-alloc-core` | The trait contracts (`Allocator`, `Deallocator`, `OsBacked`, `FixedRange`, `FreelistProtection`, `AllocFaultPolicy`), `NonZeroLayout`, and `StdCompat<A>`. Re-exported by `forge-alloc`; depend on it directly only to *implement* the traits without pulling in the implementations. |
+| `forge-alloc-capi` | C ABI for C/C++ — a hardened bump arena over a caller-provided buffer, for embedded users. `staticlib` for firmware, `cdylib` for desktop. See [`docs/C_API.md`](https://github.com/dmaesj/forge-alloc/blob/main/docs/C_API.md). (`publish = false`, provisional ABI) |
 | `forge-bench` | Criterion / CodSpeed benchmarks (workspace-internal, `publish = false`) |
 | `forge-fuzz` | cargo-fuzz targets (workspace-excluded; nightly only) |
 

@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **`forge-alloc-capi`** (new crate, `publish = false`): a C ABI over
+  `forge-alloc` for C/C++, aimed at embedded users. Exposes a hardened bump
+  arena over a caller-provided buffer (`BumpArena<StaticBacked>`) — no global
+  allocator, no syscalls, `#![no_std]`-capable down to Cortex-M / wasm.
+  `forge_bump_free` scrubs freed blocks with the poison pattern. Ships a C
+  header, C and C++ examples, and an FFI integration test. The ABI was
+  verified end-to-end against MSVC `cl` (C and C++). See `docs/C_API.md`.
+
+### Added — CI / project hygiene
+- Supply-chain gate (`deny.toml` + cargo-deny CI job): advisories, license
+  policy, and source vetting on every push.
+- MSRV CI job pinned to Rust 1.84 for the published crates.
+- `[package.metadata.docs.rs] all-features = true` on both library crates.
+- `SECURITY.md` vulnerability-disclosure policy.
+
 ## [0.3.3] - 2026-05-28
 
 Internal performance fix. No API or behavior changes; `forge-alloc-core`
