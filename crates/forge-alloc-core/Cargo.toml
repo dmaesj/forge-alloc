@@ -1,6 +1,6 @@
 [package]
 name        = "forge-alloc-core"
-version     = "0.2.2"
+version     = "0.2.3"
 description = "Core trait contracts (Allocator/Deallocator/OsBacked/FixedRange/FreelistProtection) and NonZeroLayout for the forge-alloc family"
 edition.workspace      = true
 rust-version.workspace = true

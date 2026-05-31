@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.4] - 2026-05-31
+
+`forge-alloc` 0.3.4 and `forge-alloc-core` 0.2.3. A security and correctness
+release: the additive `ZeroizeOnFree` wrapper plus a batch of fixes from an
+exhaustive, looped adversarial review of the entire workspace (backing →
+layout → hardening). No breaking API changes. The new `forge-alloc-capi` C ABI
+crate (`0.1.0`) shipped in the same cycle and is released separately.
+
 ### Added
 - **`forge-alloc-capi`** (new crate, `0.1.0`): a C ABI over
   `forge-alloc` for C/C++, aimed at embedded users. Exposes a hardened bump
@@ -35,6 +43,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the built shared library and builds the embedded `staticlib-rt` static
   library for `thumbv7em-none-eabihf` — making the previously-manual MSVC
   verification CI-enforced.
+
+### Security — `forge-alloc`
+- **Freed-secret slack scrub.** Root allocators that round an allocation up to
+  a slot/class (`Slab`, `SizeClassed`, `ExtendableSlab`, `SlabOwner`) now report
+  their true usable extent via `usable_size`, and layout-transparent wrappers
+  (`Quarantine`, `Statistics`, `Watermark`, `NumaLocal`, `SplitMetadata`,
+  `WithFallback`, `HugePageAligned`) forward it. Previously these returned
+  `None`, so an outer `PoisonOnFree`/`ZeroizeOnFree` scrubbed only the requested
+  size and left the rounding slack (freed secret bytes) un-scrubbed.
+- **`GenerationalSlab` ABA horizon closed.** A slot whose generation wraps is
+  now permanently retired instead of being re-issued at generation 0, closing
+  the use-after-free window that the wraparound previously left open. Added a
+  freelist-pop out-of-bounds guard.
+- **`Canary` scrub was UB.** The on-free canary wipe used a single wide volatile
+  store that is undefined behavior at sub-8-byte alignment; it is now a
+  byte-wise `write_volatile`, sound at any alignment and still non-elidable.
+
+### Fixed — `forge-alloc`
+- **`Slab` freelist-MAC move-safety.** The SipHash freelist MAC was keyed on the
+  free-time *address*; a `Slab` moved between a free and a later alloc (legal
+  with move-relative backings like `InlineBacked`) would then false-fail
+  verification, leak the slot, bump `corruption_events`, and debug-panic on
+  otherwise-valid code. The MAC is now keyed on the move-invariant slot index.
+- **`MmapBacked`**: `page_size()` now rejects a non-power-of-two value before it
+  reaches the round-up masks; on Windows, `release_pages` clamps the
+  `MEM_RESET` range to the committed high-water mark so it cannot fail on
+  reserved-but-uncommitted tail pages.
+- **`HugePageBacked`**: on macOS x86_64 the mapping length is rounded to the
+  fixed 2 MiB superpage size, so a sub-2-MiB `huge_page_size` no longer makes
+  the superpage `mmap` reject the request; `huge_page_size()` reports the
+  effective granularity.
+- Numerous documentation corrections surfaced by the review — most notably the
+  `Slab` double-free note (no protection level, including `SipHashMAC`, detects
+  a base-of-slot double-free) and tightened scrub/non-elision wording.
+
+### Changed — `forge-alloc-core` (0.2.3)
+- Corrected the `corruption_events` doc (Canary/CacheJitter do not keep a
+  counter) and documented the `FixedRange::base`/`size` concurrency contract.
+- `NonZeroLayout::pad_to_align` gained a `debug_assert` pinning its
+  `isize::MAX` layout-bound invariant; overflow-justification comments made
+  target-width-independent. No API change.
 
 ## [0.3.3] - 2026-05-28
 
