@@ -83,6 +83,19 @@ pub const DEFAULT_POISON: u8 = 0xDE;
 ///   *before* the slab overwrites the first 4-8 bytes with the
 ///   freelist link, so post-link coverage matches the outer
 ///   composition.
+///
+/// # `grow` / `shrink`
+///
+/// `PoisonOnFree` does **not** forward `grow`/`shrink` to the inner
+/// allocator; it uses the [`Allocator`] trait defaults, which
+/// allocate-copy-then-`self.deallocate(old)`. Routing the old allocation
+/// through *this* wrapper's poisoning `deallocate` guarantees the moved-from
+/// block (and `shrink`'s discarded tail) is poisoned. Forwarding to the
+/// inner's native `grow`/`shrink` would let a *relocating* resize free the old
+/// block through the inner's deallocate, leaving the original secret bytes
+/// intact and un-poisoned — the gap this choice closes, matching
+/// [`ZeroizeOnFree`](crate::hardening::ZeroizeOnFree). The cost is that an
+/// inner allocator's native in-place resize is not used.
 pub struct PoisonOnFree<I> {
     inner: I,
     pattern: u8,
@@ -122,11 +135,19 @@ impl<I> PoisonOnFree<I> {
 unsafe impl<I: Allocator> Deallocator for PoisonOnFree<I> {
     #[inline]
     unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: NonZeroLayout) {
-        // SAFETY: per the Deallocator contract, ptr came from this
-        // allocator's allocate(layout); the [ptr, ptr+size) region is
-        // writable for `layout.size()` bytes.
+        // SAFETY: per the Deallocator contract, ptr came from this allocator's
+        // allocate(layout), so the allocation is writable for at least
+        // `layout.size()` bytes. We poison the *full usable extent*: a caller
+        // may query `usable_size()` and write into the slack tail
+        // `[size, usable_size)`, so it must be covered too. `usable_size`'s
+        // `Some(n)` is a promise the allocation is valid for `n` bytes, so the
+        // write stays in bounds; fall back to `layout.size()` on `None`.
         unsafe {
-            core::ptr::write_bytes(ptr.as_ptr(), self.pattern, layout.size().get());
+            let scrub_len = self
+                .inner
+                .usable_size(ptr, layout)
+                .unwrap_or_else(|| layout.size().get());
+            core::ptr::write_bytes(ptr.as_ptr(), self.pattern, scrub_len);
             self.inner.deallocate(ptr, layout);
         }
     }
@@ -143,30 +164,12 @@ unsafe impl<I: Allocator> Allocator for PoisonOnFree<I> {
         self.inner.allocate_zeroed(layout)
     }
 
-    #[inline]
-    unsafe fn grow(
-        &self,
-        ptr: NonNull<u8>,
-        old: NonZeroLayout,
-        new: NonZeroLayout,
-    ) -> Result<NonNull<[u8]>, AllocError> {
-        // SAFETY: forwarded; caller upholds Allocator::grow contract.
-        unsafe { self.inner.grow(ptr, old, new) }
-    }
-
-    #[inline]
-    unsafe fn shrink(
-        &self,
-        ptr: NonNull<u8>,
-        old: NonZeroLayout,
-        new: NonZeroLayout,
-    ) -> Result<NonNull<[u8]>, AllocError> {
-        // SAFETY: forwarded; caller upholds Allocator::shrink contract.
-        // Note: shrink does NOT poison the discarded tail bytes — those
-        // bytes remain owned by the inner allocator post-shrink. To poison
-        // the discarded tail use deallocate + allocate explicitly.
-        unsafe { self.inner.shrink(ptr, old, new) }
-    }
+    // `grow` / `shrink` are deliberately NOT overridden — see the type-level
+    // docs. The trait defaults allocate-copy-then-`self.deallocate(old)`, which
+    // routes the moved-from block (and `shrink`'s discarded tail) through this
+    // wrapper's poisoning `deallocate`. Forwarding to `self.inner.grow`/`shrink`
+    // would let a relocating inner free the old block through the *inner's*
+    // deallocate, leaving the moved-from secret bytes un-poisoned.
 
     /// Bulk-reclaim the inner allocator (arenas only). Forwards the inner's
     /// cursor reclaim; it does **not** poison the previously-issued bytes —
@@ -229,26 +232,67 @@ mod tests {
     use crate::backing::InlineBacked;
     use crate::layout::Slab;
 
+    /// Validates the documented *partial-coverage* claim against a real
+    /// freelist allocator: the 32-byte slot is larger than the 8-byte
+    /// `FreeLink` the slab stamps at the slot start on deallocate, so the
+    /// bytes *after* the link must hold poison while the first 8 hold the
+    /// link. (Previously this test asserted nothing post-deallocate.)
     #[test]
     fn freed_bytes_carry_poison_pattern() {
-        let p: PoisonOnFree<Slab<u64, InlineBacked<512>>> =
+        let p: PoisonOnFree<Slab<[u8; 32], InlineBacked<512>>> =
             PoisonOnFree::new(Slab::new(8, InlineBacked::<512>::new()).unwrap());
-        let layout = NonZeroLayout::for_type::<u64>().unwrap();
+        let layout = NonZeroLayout::for_type::<[u8; 32]>().unwrap();
         let block = p.allocate(layout).unwrap();
         let ptr = block.cast::<u8>();
         unsafe {
             // Write a sentinel that's NOT the poison pattern.
-            core::ptr::write_bytes(ptr.as_ptr(), 0xAA, 8);
+            core::ptr::write_bytes(ptr.as_ptr(), 0xAA, 32);
             assert_eq!(*ptr.as_ptr(), 0xAA);
             p.deallocate(ptr, layout);
-            // After deallocate, the bytes should be poison.
-            // NB: the slot is on the freelist and the first 8 bytes hold a
-            // FreeLink. With u64 T and FreeLink u32+u32 the FreeLink covers
-            // the same 8 bytes. The poison happens BEFORE Slab::deallocate,
-            // and Slab::deallocate then overwrites with FreeLink.
-            // So we verify poison ran by re-allocating and checking the
-            // freelist link tagged correctly — see next test for direct
-            // observation against a non-overwriting backing.
+            // Poison ran across the whole slot BEFORE Slab::deallocate stamped
+            // its 8-byte FreeLink over `[0, 8)`. The tail `[8, 32)` is never
+            // touched by the slab, so it must still hold the poison pattern.
+            // (UAF read sound: InlineBacked memory persists and we do not
+            // reallocate before reading.)
+            for i in 8..32 {
+                assert_eq!(
+                    *ptr.as_ptr().add(i),
+                    DEFAULT_POISON,
+                    "tail byte {i} (after FreeLink) not poisoned",
+                );
+            }
+        }
+    }
+
+    /// `grow` must poison the moved-from block. Because `PoisonOnFree` does
+    /// NOT override `grow`, the trait default routes the old allocation through
+    /// this wrapper's poisoning `deallocate` — regression guard that a
+    /// relocating grow does not leak the original secret bytes un-poisoned.
+    #[test]
+    fn grow_poisons_the_moved_from_block() {
+        use crate::layout::BumpArena;
+        let p: PoisonOnFree<BumpArena<InlineBacked<256>>> =
+            PoisonOnFree::with_pattern(BumpArena::new(InlineBacked::<256>::new()).unwrap(), 0xBB);
+        let old = NonZeroLayout::from_size_align(16, 8).unwrap();
+        let new = NonZeroLayout::from_size_align(32, 8).unwrap();
+        let block = p.allocate(old).unwrap();
+        let old_ptr = block.cast::<u8>();
+        unsafe {
+            core::ptr::write_bytes(old_ptr.as_ptr(), 0xAA, 16);
+            let grown = p.grow(old_ptr, old, new).unwrap();
+            let new_ptr = grown.cast::<u8>();
+            // BumpArena uses the default (allocate-copy-free) grow, so the
+            // cursor advances and the moved-from region stays readable here.
+            assert_ne!(old_ptr.as_ptr(), new_ptr.as_ptr());
+            for i in 0..16 {
+                assert_eq!(
+                    *old_ptr.as_ptr().add(i),
+                    0xBB,
+                    "moved-from byte {i} not poisoned",
+                );
+            }
+            // The copied data survived into the new block.
+            assert_eq!(*new_ptr.as_ptr(), 0xAA);
         }
     }
 

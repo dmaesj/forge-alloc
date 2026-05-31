@@ -20,6 +20,14 @@
 //! the write cannot be elided. Note the same freelist-link caveat as
 //! `PoisonOnFree` applies — see the type docs on composition order.
 //!
+//! **Scope.** The guarantee is *non-elision of the free-time scrub*: the freed
+//! block is overwritten and that write cannot be optimized away. It does
+//! **not** erase copies of the secret the compiler may have spilled to
+//! registers or the stack *before* the free, and it is not constant-time — so
+//! "crypto-grade" here means the scrub itself, not end-to-end secret hygiene.
+//! For those properties zeroize the secret at its owning type (e.g. a
+//! `Drop`/`zeroize`-style guard) in addition to using this allocator wrapper.
+//!
 //! See `docs/ARCHITECTURE.md` for the composable-wrapper design.
 
 use core::ptr::NonNull;
@@ -102,10 +110,19 @@ unsafe impl<I: Allocator> Deallocator for ZeroizeOnFree<I> {
     #[inline]
     unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: NonZeroLayout) {
         // SAFETY: per the Deallocator contract, `ptr` came from this
-        // allocator's `allocate(layout)`, so `[ptr, ptr+size)` is writable for
-        // `layout.size()` bytes. We scrub before handing back to the inner.
+        // allocator's `allocate(layout)`, so the allocation is writable for at
+        // least `layout.size()` bytes. We scrub the *full usable extent*: a
+        // caller may query `usable_size()` and write secret material into the
+        // slack tail `[size, usable_size)`, which must also be erased. When
+        // `usable_size` reports `Some(n)` the allocation is valid for writes of
+        // `n` bytes (its own contract), so scrubbing `n` bytes stays in bounds;
+        // we fall back to `layout.size()` when it reports `None`.
         unsafe {
-            volatile_zeroize(ptr.as_ptr(), layout.size().get());
+            let scrub_len = self
+                .inner
+                .usable_size(ptr, layout)
+                .unwrap_or_else(|| layout.size().get());
+            volatile_zeroize(ptr.as_ptr(), scrub_len);
             self.inner.deallocate(ptr, layout);
         }
     }
@@ -239,6 +256,38 @@ mod tests {
                 );
             }
             // The copied data survived into the new block.
+            assert_eq!(*new_ptr.as_ptr(), 0xAA);
+        }
+    }
+
+    /// The default `shrink` allocate-copy-frees the old (larger) block through
+    /// `self.deallocate`, so the *entire* moved-from block — including the
+    /// discarded tail `[new_size, old_size)` — must come back zeroed. Regression
+    /// guard for the documented "shrink's discarded tail is erased" claim.
+    #[test]
+    fn shrink_zeroes_the_discarded_tail() {
+        let z: ZeroizeOnFree<BumpArena<InlineBacked<256>>> =
+            ZeroizeOnFree::new(BumpArena::new(InlineBacked::<256>::new()).unwrap());
+        let old = NonZeroLayout::from_size_align(32, 8).unwrap();
+        let new = NonZeroLayout::from_size_align(16, 8).unwrap();
+        let block = z.allocate(old).unwrap();
+        let old_ptr = block.cast::<u8>();
+        unsafe {
+            core::ptr::write_bytes(old_ptr.as_ptr(), 0xAA, 32);
+            let shrunk = z.shrink(old_ptr, old, new).unwrap();
+            let new_ptr = shrunk.cast::<u8>();
+            // BumpArena uses the default (allocate-copy-free) shrink: the new
+            // 16-byte block sits at a fresh cursor position, leaving the old
+            // 32-byte region readable and (post-deallocate) fully zeroed.
+            assert_ne!(old_ptr.as_ptr(), new_ptr.as_ptr());
+            for i in 0..32 {
+                assert_eq!(
+                    *old_ptr.as_ptr().add(i),
+                    0x00,
+                    "moved-from byte {i} (incl. discarded tail) was not zeroed",
+                );
+            }
+            // The retained prefix survived into the new block.
             assert_eq!(*new_ptr.as_ptr(), 0xAA);
         }
     }
