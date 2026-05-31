@@ -11,8 +11,9 @@
 //! same mechanism C's `memset_s` / `explicit_bzero` and the `zeroize` crate
 //! rely on, with no external dependency. A trailing
 //! [`compiler_fence`](core::sync::atomic::compiler_fence) is a defensive
-//! compile-time barrier; it emits no CPU fence and does not order the volatile
-//! stores against a later non-volatile read.
+//! compile-time barrier: it stops the *compiler* from reordering the scrub
+//! with surrounding accesses, but emits no CPU/hardware barrier and so adds no
+//! cross-thread ordering. Non-elision does not depend on it.
 //!
 //! For secret material (keys, plaintext-before-encryption, tokens) prefer this
 //! over `PoisonOnFree<_>` with a zero pattern: it is strictly stronger because
@@ -33,10 +34,9 @@ use forge_alloc_core::{AllocError, Allocator, Deallocator, FixedRange, NonZeroLa
 /// drop it as a dead store — this is the whole non-elision guarantee.
 /// Byte-wise (not word-wise) keeps it correct at any alignment; `ptr` may be
 /// only byte-aligned. The trailing `compiler_fence(SeqCst)` is a defensive
-/// compile-time barrier: it pins the scrub ahead of later compiler-visible
-/// accesses in program order, but emits no CPU barrier and does not order the
-/// volatile stores against a later non-volatile read. Non-elision does not
-/// depend on it.
+/// compile-time barrier: it stops the *compiler* from reordering the scrub
+/// ahead of or behind surrounding accesses, but emits no CPU/hardware barrier,
+/// so it adds no cross-thread ordering. Non-elision does not depend on it.
 ///
 /// # Safety
 ///
@@ -155,6 +155,15 @@ unsafe impl<I: Allocator> Allocator for ZeroizeOnFree<I> {
     }
 }
 
+/// `FixedRange` passthrough so this wrapper composes over a `lazy_commit`
+/// `MmapBacked` and similar backings.
+///
+/// **Footgun:** the zeroize-on-free scrub runs only in this wrapper's
+/// `deallocate`. If you nest it *as a backing under* an arena —
+/// `BumpArena<ZeroizeOnFree<..>>` — the arena carves directly from
+/// `base()`/`size()` and its own `deallocate` is a no-op, so the scrub **never
+/// runs**. Keep the hardening wrapper **outermost** (wrapping the allocator),
+/// never as the `FixedRange` an arena consumes.
 impl<I: FixedRange> FixedRange for ZeroizeOnFree<I> {
     #[inline]
     fn base(&self) -> NonNull<u8> {

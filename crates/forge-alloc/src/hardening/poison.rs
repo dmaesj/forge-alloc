@@ -195,6 +195,15 @@ unsafe impl<I: Allocator> Allocator for PoisonOnFree<I> {
     }
 }
 
+/// `FixedRange` passthrough so this wrapper composes over a `lazy_commit`
+/// `MmapBacked` and similar backings.
+///
+/// **Footgun:** the poison-on-free scrub runs only in this wrapper's
+/// `deallocate`. If you nest it *as a backing under* an arena —
+/// `BumpArena<PoisonOnFree<..>>` — the arena carves directly from
+/// `base()`/`size()` and its own `deallocate` is a no-op, so the scrub **never
+/// runs**. Keep the hardening wrapper **outermost** (wrapping the allocator),
+/// never as the `FixedRange` an arena consumes.
 impl<I: FixedRange> FixedRange for PoisonOnFree<I> {
     #[inline]
     fn base(&self) -> NonNull<u8> {
@@ -273,5 +282,20 @@ mod tests {
     fn explicit_pattern_set() {
         let p = PoisonOnFree::with_pattern(InlineBacked::<64>::new(), 0x42);
         assert_eq!(p.pattern(), 0x42);
+    }
+
+    /// `reset` must forward to the inner arena (not the trait-default `Err`), so
+    /// a wrapped `BumpArena` stays resettable — regression guard mirroring the
+    /// `ZeroizeOnFree` test.
+    #[test]
+    fn reset_forwards_to_inner_arena() {
+        use crate::layout::BumpArena;
+        let mut p: PoisonOnFree<BumpArena<InlineBacked<256>>> =
+            PoisonOnFree::new(BumpArena::new(InlineBacked::<256>::new()).unwrap());
+        let layout = NonZeroLayout::from_size_align(16, 8).unwrap();
+        let _ = p.allocate(layout).unwrap();
+        assert!(p.inner().allocated() > 0);
+        assert!(p.reset().is_ok(), "wrapped arena must be resettable");
+        assert_eq!(p.inner().allocated(), 0);
     }
 }
