@@ -23,8 +23,11 @@ pub const DEFAULT_POISON: u8 = 0xDE;
 ///
 /// # Poison coverage caveats
 ///
-/// `PoisonOnFree` writes the pattern across the *entire* `[ptr, ptr+size)`
-/// region **before** forwarding to `self.inner.deallocate(ptr, layout)`.
+/// `PoisonOnFree` writes the pattern across the *entire* usable extent —
+/// `[ptr, ptr + usable_size)`, falling back to `[ptr, ptr + size)` when the
+/// inner reports no `usable_size` — **before** forwarding to
+/// `self.inner.deallocate(ptr, layout)`, so a secret written into the
+/// `[size, usable_size)` slack is covered too.
 /// What happens after that handoff is the inner allocator's business — and
 /// some inner allocators reuse the very bytes we just poisoned for their
 /// own freelist bookkeeping:
@@ -341,5 +344,109 @@ mod tests {
         assert!(p.inner().allocated() > 0);
         assert!(p.reset().is_ok(), "wrapped arena must be resettable");
         assert_eq!(p.inner().allocated(), 0);
+    }
+
+    /// The default `shrink` allocate-copy-frees the old (larger) block through
+    /// `self.deallocate`, so the *entire* moved-from block — including the
+    /// discarded tail `[new_size, old_size)` — must be poisoned. Mirror of the
+    /// `ZeroizeOnFree` shrink test; guards the documented tail coverage.
+    #[test]
+    fn shrink_poisons_the_discarded_tail() {
+        use crate::layout::BumpArena;
+        let p: PoisonOnFree<BumpArena<InlineBacked<256>>> =
+            PoisonOnFree::with_pattern(BumpArena::new(InlineBacked::<256>::new()).unwrap(), 0xBB);
+        let old = NonZeroLayout::from_size_align(32, 8).unwrap();
+        let new = NonZeroLayout::from_size_align(16, 8).unwrap();
+        let block = p.allocate(old).unwrap();
+        let old_ptr = block.cast::<u8>();
+        unsafe {
+            core::ptr::write_bytes(old_ptr.as_ptr(), 0xAA, 32);
+            let shrunk = p.shrink(old_ptr, old, new).unwrap();
+            let new_ptr = shrunk.cast::<u8>();
+            assert_ne!(old_ptr.as_ptr(), new_ptr.as_ptr());
+            for i in 0..32 {
+                assert_eq!(
+                    *old_ptr.as_ptr().add(i),
+                    0xBB,
+                    "moved-from byte {i} (incl. discarded tail) not poisoned",
+                );
+            }
+            // The retained prefix survived into the new block.
+            assert_eq!(*new_ptr.as_ptr(), 0xAA);
+        }
+    }
+
+    /// Test allocator that reserves `slack` extra bytes beyond each request and
+    /// advertises them via `usable_size`. No real allocator in the crate
+    /// overrides `usable_size` (all return `None`), so this is the only way to
+    /// exercise the wrapper's slack-scrub path. Bump-backed so freed bytes stay
+    /// readable for the assertion.
+    struct SlackBacked {
+        inner: crate::layout::BumpArena<InlineBacked<256>>,
+        slack: usize,
+    }
+
+    impl SlackBacked {
+        fn new(slack: usize) -> Self {
+            Self {
+                inner: crate::layout::BumpArena::new(InlineBacked::<256>::new()).unwrap(),
+                slack,
+            }
+        }
+        fn padded(&self, layout: NonZeroLayout) -> NonZeroLayout {
+            NonZeroLayout::from_size_align(layout.size().get() + self.slack, layout.align().get())
+                .unwrap()
+        }
+    }
+
+    unsafe impl Deallocator for SlackBacked {
+        unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: NonZeroLayout) {
+            // SAFETY: bump deallocate is a no-op; the padded layout matches what
+            // `allocate` reserved.
+            unsafe { self.inner.deallocate(ptr, self.padded(layout)) }
+        }
+    }
+
+    unsafe impl Allocator for SlackBacked {
+        fn allocate(&self, layout: NonZeroLayout) -> Result<NonNull<[u8]>, AllocError> {
+            // Reserve request + slack, but hand back a slice of the requested
+            // len so the caller sees `layout.size()` while the slack tail is
+            // really backed.
+            let block = self.inner.allocate(self.padded(layout))?;
+            Ok(NonNull::slice_from_raw_parts(
+                block.cast::<u8>(),
+                layout.size().get(),
+            ))
+        }
+        fn allocate_zeroed(&self, layout: NonZeroLayout) -> Result<NonNull<[u8]>, AllocError> {
+            self.allocate(layout)
+        }
+        unsafe fn usable_size(&self, _ptr: NonNull<u8>, layout: NonZeroLayout) -> Option<usize> {
+            Some(layout.size().get() + self.slack)
+        }
+    }
+
+    /// The slack tail `[size, usable_size)` an allocator reports as usable must
+    /// be poisoned on free, not just `[0, size)`. Exercises the otherwise-dead
+    /// `usable_size`-scrub branch via a mock that reports 16 bytes of slack.
+    #[test]
+    fn usable_size_slack_tail_is_poisoned() {
+        let p: PoisonOnFree<SlackBacked> = PoisonOnFree::with_pattern(SlackBacked::new(16), 0xBB);
+        let layout = NonZeroLayout::from_size_align(16, 8).unwrap();
+        let block = p.allocate(layout).unwrap();
+        let ptr = block.cast::<u8>();
+        unsafe {
+            // Write a secret across the FULL usable extent (16 request + 16
+            // slack = 32), all of which is genuinely backed.
+            core::ptr::write_bytes(ptr.as_ptr(), 0xAA, 32);
+            p.deallocate(ptr, layout);
+            for i in 0..32 {
+                assert_eq!(
+                    *ptr.as_ptr().add(i),
+                    0xBB,
+                    "usable byte {i} (incl. slack tail) was not poisoned",
+                );
+            }
+        }
     }
 }

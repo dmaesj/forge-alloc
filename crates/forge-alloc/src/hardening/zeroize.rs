@@ -67,8 +67,11 @@ unsafe fn volatile_zeroize(ptr: *mut u8, len: usize) {
 /// # Coverage and composition order
 ///
 /// Like [`PoisonOnFree`](crate::hardening::PoisonOnFree), `ZeroizeOnFree`
-/// scrubs the *entire* `[ptr, ptr + size)` region **before** forwarding to
-/// `self.inner.deallocate`. If the inner allocator writes back into the freed
+/// scrubs the *entire* usable extent — `[ptr, ptr + usable_size)`, falling back
+/// to `[ptr, ptr + size)` when the inner reports no `usable_size` — **before**
+/// forwarding to `self.inner.deallocate`, so a secret written into the
+/// `[size, usable_size)` slack is erased too. If the inner allocator writes back
+/// into the freed
 /// region (e.g. `Slab` / `SizeClassed` stamp a freelist link over the first
 /// 4–8 bytes), those bytes then hold link data rather than zeroes — exactly the
 /// caveat documented on `PoisonOnFree`. For maximum persistence of the zeroing,
@@ -311,5 +314,79 @@ mod tests {
         assert!(z.inner().allocated() > 0);
         assert!(z.reset().is_ok(), "wrapped arena must be resettable");
         assert_eq!(z.inner().allocated(), 0);
+    }
+
+    /// Test allocator that reserves `slack` extra bytes beyond each request and
+    /// advertises them via `usable_size`. No real allocator in the crate
+    /// overrides `usable_size` (all return `None`), so this is the only way to
+    /// exercise the wrapper's slack-scrub path. Bump-backed so freed bytes stay
+    /// readable for the assertion.
+    struct SlackBacked {
+        inner: BumpArena<InlineBacked<256>>,
+        slack: usize,
+    }
+
+    impl SlackBacked {
+        fn new(slack: usize) -> Self {
+            Self {
+                inner: BumpArena::new(InlineBacked::<256>::new()).unwrap(),
+                slack,
+            }
+        }
+        fn padded(&self, layout: NonZeroLayout) -> NonZeroLayout {
+            NonZeroLayout::from_size_align(layout.size().get() + self.slack, layout.align().get())
+                .unwrap()
+        }
+    }
+
+    unsafe impl Deallocator for SlackBacked {
+        unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: NonZeroLayout) {
+            // SAFETY: bump deallocate is a no-op; the padded layout matches what
+            // `allocate` reserved.
+            unsafe { self.inner.deallocate(ptr, self.padded(layout)) }
+        }
+    }
+
+    unsafe impl Allocator for SlackBacked {
+        fn allocate(&self, layout: NonZeroLayout) -> Result<NonNull<[u8]>, AllocError> {
+            // Reserve request + slack, but hand back a slice of the requested
+            // len so the caller sees `layout.size()` while the slack tail is
+            // really backed.
+            let block = self.inner.allocate(self.padded(layout))?;
+            Ok(NonNull::slice_from_raw_parts(
+                block.cast::<u8>(),
+                layout.size().get(),
+            ))
+        }
+        fn allocate_zeroed(&self, layout: NonZeroLayout) -> Result<NonNull<[u8]>, AllocError> {
+            self.allocate(layout)
+        }
+        unsafe fn usable_size(&self, _ptr: NonNull<u8>, layout: NonZeroLayout) -> Option<usize> {
+            Some(layout.size().get() + self.slack)
+        }
+    }
+
+    /// The slack tail `[size, usable_size)` an allocator reports as usable must
+    /// be zeroed on free, not just `[0, size)`. Exercises the otherwise-dead
+    /// `usable_size`-scrub branch via a mock that reports 16 bytes of slack.
+    #[test]
+    fn usable_size_slack_tail_is_zeroed() {
+        let z: ZeroizeOnFree<SlackBacked> = ZeroizeOnFree::new(SlackBacked::new(16));
+        let layout = NonZeroLayout::from_size_align(16, 8).unwrap();
+        let block = z.allocate(layout).unwrap();
+        let ptr = block.cast::<u8>();
+        unsafe {
+            // Write a secret across the FULL usable extent (16 request + 16
+            // slack = 32), all of which is genuinely backed.
+            core::ptr::write_bytes(ptr.as_ptr(), 0xAA, 32);
+            z.deallocate(ptr, layout);
+            for i in 0..32 {
+                assert_eq!(
+                    *ptr.as_ptr().add(i),
+                    0x00,
+                    "usable byte {i} (incl. slack tail) was not zeroed",
+                );
+            }
+        }
     }
 }
