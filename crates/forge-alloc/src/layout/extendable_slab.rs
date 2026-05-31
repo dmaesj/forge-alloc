@@ -299,6 +299,25 @@ where
         Ok(block)
     }
 
+    #[inline]
+    unsafe fn usable_size(&self, ptr: NonNull<u8>, layout: NonZeroLayout) -> Option<usize> {
+        // Each segment is a `Slab` whose slots are `block_stride` bytes, which
+        // can exceed the requested size — report the owning segment's usable
+        // size so an outer scrub wrapper wipes the whole slot, not just the
+        // requested prefix (the same slack `Slab`/`SizeClassed` now report).
+        // Routed by segment provenance, exactly like `deallocate`.
+        use forge_alloc_core::FixedRange;
+        let segs = self.segments.lock().expect("ExtendableSlab mutex poisoned");
+        for seg in segs.iter() {
+            if seg.contains(ptr) {
+                // SAFETY: ptr is in this segment's range → it came from this
+                // segment's allocate with `layout`.
+                return unsafe { seg.usable_size(ptr, layout) };
+            }
+        }
+        None
+    }
+
     fn capacity_bytes(&self) -> Option<usize> {
         // Total bytes across all current segments. Growth means this number
         // can increase between calls — Watermark callers should call this
@@ -379,6 +398,25 @@ mod tests {
             s.deallocate(a.cast(), layout);
             s.deallocate(c.cast(), layout);
         }
+    }
+
+    /// `usable_size` reports the per-segment slab's slot stride, not the
+    /// requested size, so an outer scrub wrapper wipes the whole slot. An
+    /// `ExtendableSlab<u8>` has a 1-byte type but an 8-byte stride.
+    #[test]
+    #[cfg_attr(miri, ignore = "miri-incompatible: ExtendableSlab uses MmapBacked")]
+    fn usable_size_reports_segment_stride() {
+        let s: ExtendableSlab<u8> = ExtendableSlab::new(8);
+        let layout = NonZeroLayout::from_size_align(1, 1).unwrap();
+        let block = s.allocate(layout).unwrap();
+        let ptr = block.cast::<u8>();
+        let us = unsafe { s.usable_size(ptr, layout) };
+        assert_eq!(
+            us,
+            Some(8),
+            "usable_size must report the segment slot stride"
+        );
+        unsafe { s.deallocate(ptr, layout) };
     }
 
     #[test]

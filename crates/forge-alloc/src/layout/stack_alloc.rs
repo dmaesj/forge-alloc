@@ -1,6 +1,10 @@
 //! `StackAlloc<B>` — LIFO-discipline allocator. Deallocation is only valid
-//! for the most recently allocated block; out-of-order frees are caught in
-//! debug builds (panic) and are UB in release.
+//! for the most recently allocated block. An out-of-order (or double-) free
+//! is *detected*, not undefined behavior: debug builds panic, and release
+//! builds treat it as a safe no-op — the offending free is ignored and the
+//! allocator's cursor/frame stack stay consistent (the block is simply not
+//! reclaimed). The misuse is a caller logic error, but it never corrupts the
+//! allocator.
 //!
 //! Cheaper than [`BumpArena`](crate::layout::BumpArena) for patterns that do
 //! reclaim memory but always in LIFO order — typical of nested scope
@@ -235,6 +239,23 @@ mod tests {
         let _b = s.allocate(layout).unwrap();
         // Free a before b — violates LIFO.
         unsafe { s.deallocate(a.cast(), layout) };
+    }
+
+    /// In release builds an out-of-order free is a SAFE no-op (not UB): the
+    /// offending free is ignored and the cursor is left untouched, so the
+    /// allocator state stays consistent. Pinned so a future change that turned
+    /// the safe `return` into an actual pop (real corruption) is caught.
+    #[test]
+    #[cfg(not(debug_assertions))]
+    fn out_of_order_free_is_safe_noop_in_release() {
+        let s = StackAlloc::new(InlineBacked::<256>::new()).unwrap();
+        let layout = NonZeroLayout::from_size_align(8, 8).unwrap();
+        let a = s.allocate(layout).unwrap();
+        let _b = s.allocate(layout).unwrap();
+        let before = s.allocated();
+        // Free `a` before `b` — violates LIFO; must be ignored, cursor intact.
+        unsafe { s.deallocate(a.cast(), layout) };
+        assert_eq!(s.allocated(), before, "out-of-order free must not pop");
     }
 
     #[test]

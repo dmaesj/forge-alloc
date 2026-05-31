@@ -446,10 +446,14 @@ mod siphash_corruption {
             // documented debug panic. Both are acceptable so long as
             // they happen before any unsafe deref of corrupted bytes.
             if let Some(msg) = result {
+                // Only the documented debug corruption panic is acceptable.
+                // (Previously `|| msg.contains("alloc")` was also accepted, but
+                // that matched the test's own `.expect("alloc c after
+                // corruption")` — so a spurious allocation FAILURE would have
+                // been silently accepted as valid corruption detection. A
+                // genuine OOM here is a real bug and must fail the test.)
                 prop_assert!(
-                    msg.contains("Slab freelist corruption")
-                        || msg.contains("Slab::deallocate")
-                        || msg.contains("alloc"),
+                    msg.contains("Slab freelist corruption"),
                     "unexpected panic for next_idx {new_idx}: {msg}",
                 );
             }
