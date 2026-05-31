@@ -121,13 +121,15 @@ impl NonZeroLayout {
         // The plain `+` cannot overflow. Rust evaluates `size + align - 1` as
         // `(size + align) - 1`, so the load-bearing intermediate is `size +
         // align`, NOT the final `size + align - 1`. `new` caps `size` at
-        // `isize::MAX - (align - 1)`, so `size + align <= isize::MAX + 1 =
-        // 2^63 <= usize::MAX` — the intermediate fits without wrapping.
+        // `isize::MAX - (align - 1)`, so `size + align <= isize::MAX + 1`.
+        // That ceiling is `2^(usize::BITS - 1)` (2^63 on 64-bit, 2^31 on
+        // 32-bit) — always `<= usize::MAX = 2^usize::BITS - 1`, so the
+        // intermediate fits without wrapping on every target width.
         let padded = (self.size.get() + align - 1) & !(align - 1);
         // Pin that load-bearing coincidence: `isize::MAX - (align - 1)` is
-        // itself an `align`-multiple (since `isize::MAX + 1 = 2^63` is a
-        // multiple of every power-of-two align), so rounding the capped size
-        // up never exceeds it. This struct-literal bypasses `new`, so if a
+        // itself an `align`-multiple (since `isize::MAX + 1 = 2^(usize::BITS
+        // - 1)` is a power of two, hence a multiple of every power-of-two
+        // align <= it), so rounding the capped size up never exceeds it. This struct-literal bypasses `new`, so if a
         // future change ever loosened `new`'s bound to `isize::MAX`, the
         // result could violate `to_layout`'s `from_size_align_unchecked`
         // precondition and feed UB to the real `Global`. Catch that here.
