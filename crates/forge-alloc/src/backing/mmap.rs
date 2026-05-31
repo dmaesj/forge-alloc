@@ -130,8 +130,16 @@ pub(super) fn capture_synthetic_einval() {
 /// `NumaLocal`). Currently only `populate` is honored on platforms that support
 /// it; the rest are accepted for forward compatibility but currently no-op.
 ///
-/// `#[non_exhaustive]` so future bits (`MAP_LOCKED`, `MAP_NORESERVE`, MTE
-/// enable) can be added without an API break.
+/// `#[non_exhaustive]` so future bits (`MAP_NORESERVE`, MTE enable) can be
+/// added without an API break.
+///
+/// **Note on `MAP_LOCKED` / `mlock`:** page-locking for cryptographic secrets
+/// is available as a separate backing type — [`LockedMmapBacked`] — rather
+/// than as a flag here. Using a distinct type enforces the fail-closed
+/// guarantee (no silent unlocked fallback) at the type level and makes the
+/// security intent visible in caller code.
+///
+/// [`LockedMmapBacked`]: crate::LockedMmapBacked
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct MmapFlags {

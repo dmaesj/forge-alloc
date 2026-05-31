@@ -73,7 +73,7 @@ pub use backing::System;
 #[doc(inline)]
 pub use backing::{
     mmap_clear_last_os_error, mmap_last_os_error, mmap_record_os_error, page_size, HugePageBacked,
-    MmapBacked, MmapFlags,
+    LockedMmapBacked, MmapBacked, MmapFlags,
 };
 
 #[doc(inline)]

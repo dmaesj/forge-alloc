@@ -24,6 +24,11 @@
 //!   Windows `MEM_LARGE_PAGES`). Same gating as `MmapBacked`. Errors when
 //!   the platform can't satisfy the request; pair with
 //!   [`WithFallback`](crate::WithFallback) for graceful degradation.
+//! - [`LockedMmapBacked`] — OS-mapped anonymous region whose pages are
+//!   **locked into physical RAM** (`mlock` / `VirtualLock`). For storing
+//!   cryptographic secrets: the pages are never paged out to swap or disk.
+//!   Fail-closed: if the lock syscall fails the constructor returns `Err`
+//!   — there is no silent unlocked fallback. Same gating as `MmapBacked`.
 //! - [`HeapBytes`] — `FixedRange`-only owner of a single global-allocator
 //!   block. The heap twin of `MmapBacked` for cases where mmap-level
 //!   isolation isn't worth the syscall cost.
@@ -59,3 +64,8 @@ pub use mmap::{
 mod huge_page_backed;
 #[cfg(all(feature = "std", any(unix, windows)))]
 pub use huge_page_backed::HugePageBacked;
+
+#[cfg(all(feature = "std", any(unix, windows)))]
+mod locked_mmap;
+#[cfg(all(feature = "std", any(unix, windows)))]
+pub use locked_mmap::LockedMmapBacked;
