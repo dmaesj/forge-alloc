@@ -1026,11 +1026,31 @@ mod tests {
             h.join().unwrap();
         }
         owner.drain();
-        // After drain, the freelist should hold all 128 slots again; we can
-        // re-alloc 128 without hitting next_uncarved.
+        // After drain, the freelist must hold exactly the 128 freed slots, so
+        // re-allocating 128 must return those SAME slots (popped from the
+        // freelist before any fresh carve from next_uncarved). Asserting the
+        // re-allocated addresses equal the freed set is what actually proves
+        // drain reclaimed them: a mere `is_ok()` check would pass even if drain
+        // dropped every entry, because the slab would just carve fresh slots
+        // from the remaining capacity (256 > 128).
+        use std::collections::HashSet;
+        let freed: HashSet<usize> = ptrs_addrs.iter().copied().collect();
+        let mut reclaimed: HashSet<usize> = HashSet::new();
         for _ in 0..128 {
-            assert!(owner.allocate(layout).is_ok());
+            let p = owner
+                .allocate(layout)
+                .expect("a reclaimed slot must be allocatable");
+            let addr = p.cast::<u8>().as_ptr() as usize;
+            assert!(
+                freed.contains(&addr),
+                "re-allocated slot {addr:#x} is not one of the drained slots — drain failed to reclaim",
+            );
+            reclaimed.insert(addr);
         }
+        assert_eq!(
+            reclaimed, freed,
+            "the 128 re-allocated slots must be exactly the 128 drained slots",
+        );
     }
 
     // ====================================================================
