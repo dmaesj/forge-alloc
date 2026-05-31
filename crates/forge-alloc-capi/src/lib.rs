@@ -37,10 +37,10 @@
 #![warn(missing_docs)]
 
 use core::ffi::{c_int, c_void};
-use core::ptr::{self, NonNull};
+use core::ptr;
 use core::slice;
 
-use forge_alloc::{Allocator, BumpArena, Deallocator, NonZeroLayout, StaticBacked, DEFAULT_POISON};
+use forge_alloc::{Allocator, BumpArena, NonZeroLayout, StaticBacked, DEFAULT_POISON};
 
 /// The concrete allocator that lives inside a [`ForgeBump`] handle.
 ///
@@ -80,14 +80,17 @@ pub struct ForgeBump {
 
 /// Initialize a bump arena over a caller-owned buffer.
 ///
-/// Returns 1 on success, 0 if `handle`/`buf` is null or `len` is 0.
+/// Returns 1 on success, 0 if `handle`/`buf` is null, or `len` is 0 or exceeds
+/// `isize::MAX` (the maximum size of a single Rust allocation/slice).
 ///
 /// # Safety
 ///
 /// - `handle` must point to writable storage of at least `sizeof(forge_bump_t)`
-///   bytes, aligned to `_Alignof(void*)`. Re-initializing a live handle leaks
-///   nothing (the arena owns no heap), but you must not have outstanding
-///   allocations you still intend to use.
+///   bytes, aligned to `_Alignof(void*)`. Re-initializing a handle overwrites
+///   it without running the previous handle's `forge_bump_destroy`; since the
+///   arena owns no heap this leaks nothing, but any prior borrow of the old
+///   buffer is silently dropped, so you must not have outstanding allocations
+///   you still intend to use.
 /// - `buf` must point to `len` writable bytes that remain valid and unaliased
 ///   for the entire lifetime of the handle — that is, until
 ///   [`forge_bump_destroy`] (or until you drop the buffer, whichever is first).
@@ -97,11 +100,15 @@ pub unsafe extern "C" fn forge_bump_init(
     buf: *mut c_void,
     len: usize,
 ) -> c_int {
-    if handle.is_null() || buf.is_null() || len == 0 {
+    // `len == 0` has no usable arena; `len > isize::MAX` would make the slice
+    // below violate `from_raw_parts_mut`'s size ceiling (reachable on 16-/32-bit
+    // no_std targets, where it would otherwise be instant UB).
+    if handle.is_null() || buf.is_null() || len == 0 || len > isize::MAX as usize {
         return 0;
     }
     // SAFETY: the caller guarantees `buf..buf+len` is valid for the handle's
-    // lifetime; we erase that to 'static per the documented contract.
+    // lifetime; we erase that to 'static per the documented contract. `len` is
+    // bounded by `isize::MAX` above, satisfying the slice size requirement.
     let region: &'static mut [u8] = unsafe { slice::from_raw_parts_mut(buf.cast::<u8>(), len) };
     match BumpArena::new(StaticBacked::new(region)) {
         Ok(arena) => {
@@ -173,15 +180,19 @@ pub unsafe extern "C" fn forge_bump_alloc_zeroed(
 
 /// Free a block. The bytes are overwritten with the poison pattern
 /// ([`forge_alloc::DEFAULT_POISON`]) so freed secrets can't be recovered via a
-/// use-after-free read. Space is not individually reclaimed — a bump arena
-/// reclaims in bulk via [`forge_bump_reset`]; this call exists for hygiene
-/// (scrubbing) and API symmetry. A null `ptr` is ignored.
+/// use-after-free read. Space is not individually reclaimed — a bump arena's
+/// `deallocate` is a no-op; reclaim happens in bulk via [`forge_bump_reset`].
+/// This call exists for hygiene (scrubbing) and API symmetry. A null `ptr` (or
+/// `size == 0`) is ignored. `align` is accepted for symmetry but unused, since
+/// the scrub depends only on `ptr`/`size`.
 ///
 /// # Safety
 ///
-/// `ptr`/`size`/`align` must match a live block previously returned by
+/// `ptr`/`size` must name a live block previously returned by
 /// [`forge_bump_alloc`] / [`forge_bump_alloc_zeroed`] from this same `handle`,
-/// not yet freed. No concurrent call may touch the same handle.
+/// not yet freed. **A `size` larger than the original block scrubs past its end
+/// — an out-of-bounds write (undefined behavior), not a graceful error.** No
+/// concurrent call may touch the same handle.
 #[no_mangle]
 pub unsafe extern "C" fn forge_bump_free(
     handle: *mut ForgeBump,
@@ -189,24 +200,16 @@ pub unsafe extern "C" fn forge_bump_free(
     size: usize,
     align: usize,
 ) {
-    if handle.is_null() || ptr.is_null() {
+    // A bump arena's `deallocate` is a no-op, so freeing reduces to the poison
+    // scrub; `handle` and `align` are accepted for API symmetry but unused.
+    // Scrubbing unconditionally (rather than gating on a valid layout) avoids a
+    // silent no-scrub when a caller passes a non-power-of-two `align`.
+    let _ = (handle, align);
+    if ptr.is_null() || size == 0 {
         return;
     }
-    let layout = match NonZeroLayout::from_size_align(size, align) {
-        Ok(layout) => layout,
-        Err(_) => return,
-    };
-    // Poison the freed region before reclaiming — mirrors PoisonOnFree over a
-    // bump arena. SAFETY: caller guarantees a live `size`-byte block at `ptr`.
+    // SAFETY: caller guarantees a live `size`-byte block at `ptr` (see # Safety).
     unsafe { ptr::write_bytes(ptr.cast::<u8>(), DEFAULT_POISON, size) };
-    let block = match NonNull::new(ptr.cast::<u8>()) {
-        Some(block) => block,
-        None => return,
-    };
-    // SAFETY: initialized handle; `deallocate` is a documented no-op for
-    // BumpArena, called here only to honor the trait contract.
-    let arena: &Bump = unsafe { &*handle.cast::<Bump>() };
-    unsafe { arena.deallocate(block, layout) };
 }
 
 /// Reclaim every allocation at once, resetting the cursor to the start of the

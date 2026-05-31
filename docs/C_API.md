@@ -76,14 +76,17 @@ surface has had real external use.
 
 The FFI surface is exercised two ways:
 
-- An in-crate Rust integration test
+- **CI-enforced:** an in-crate Rust integration test
   ([`tests/ffi.rs`](../crates/forge-alloc-capi/tests/ffi.rs)) drives every
   entry point end-to-end (init → alloc/zeroed → poison-on-free → reset →
   destroy, plus exhaustion and invalid-argument paths), so the behavior is
-  covered even where a C toolchain isn't.
-- The C and C++ examples compile against the generated header and link the
-  built library; the exported symbol names were checked against the header, and
-  both examples were run successfully against an MSVC build.
+  covered even where a C toolchain isn't. This is the guarantee that travels
+  with the repo.
+- **One-time manual check** (not yet wired into CI): the C and C++ examples were
+  compiled against the generated header and linked the built library, the
+  exported symbol names were checked against the header, and both examples ran
+  successfully against an MSVC build. A CI job that compiles the examples would
+  make this reproducible.
 
 ## Roadmap (not commitments)
 

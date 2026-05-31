@@ -45,7 +45,8 @@ typedef struct forge_bump {
 /*
  * Initialize a bump arena over [buf, buf+len). The buffer must outlive the
  * handle and must not be aliased elsewhere. Returns nonzero on success, 0 if
- * any argument is null/zero. `len == 0` fails.
+ * any argument is null/zero or `len` exceeds PTRDIFF_MAX (the maximum size of a
+ * single allocation).
  */
 int forge_bump_init(forge_bump_t *handle, void *buf, size_t len);
 
@@ -62,8 +63,9 @@ void *forge_bump_alloc_zeroed(forge_bump_t *handle, size_t size, size_t align);
 /*
  * Free a block: its bytes are scrubbed with the poison pattern. Space is not
  * individually reclaimed (a bump arena reclaims in bulk via reset); this is for
- * hygiene and symmetry. `ptr` may be NULL (ignored). `size`/`align` must match
- * the original allocation.
+ * hygiene and symmetry. A NULL `ptr` (or `size == 0`) is ignored. `size` must
+ * not exceed the original block — a larger `size` scrubs out of bounds. `align`
+ * is accepted for symmetry but unused.
  */
 void forge_bump_free(forge_bump_t *handle, void *ptr, size_t size, size_t align);
 

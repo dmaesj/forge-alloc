@@ -11,9 +11,10 @@
  *      -o bump_example
  *   ./bump_example
  *
- * (On Windows link forge_alloc_capi.lib; the -lpthread/-ldl/-lm are the std
- * runtime deps on Linux. For bare metal, link the staticlib built with
- * --no-default-features into your firmware image.)
+ * (On Windows link the cdylib import lib forge_alloc_capi.dll.lib and keep the
+ * DLL on PATH; the -lpthread/-ldl/-lm are the std runtime deps on Linux. For
+ * bare metal, link the staticlib built with --no-default-features --features
+ * staticlib-rt into your firmware image.)
  */
 #include "forge_alloc.h"
 

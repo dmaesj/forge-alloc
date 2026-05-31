@@ -454,7 +454,9 @@ picked up automatically by `cargo update`.
   `Handle<T, G>`, `SlabOwner<T, B>` / `SlabRemote<T, B>` /
   `RemoteFreeQueue`.
 
-[Unreleased]: https://github.com/dmaesj/forge-alloc/compare/v0.3.1...HEAD
+[Unreleased]: https://github.com/dmaesj/forge-alloc/compare/v0.3.3...HEAD
+[0.3.3]: https://github.com/dmaesj/forge-alloc/compare/v0.3.2...v0.3.3
+[0.3.2]: https://github.com/dmaesj/forge-alloc/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/dmaesj/forge-alloc/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/dmaesj/forge-alloc/compare/forge-alloc-core-v0.1.2...v0.3.0
 [forge-alloc-core 0.1.2]: https://github.com/dmaesj/forge-alloc/compare/v0.2.1...forge-alloc-core-v0.1.2
