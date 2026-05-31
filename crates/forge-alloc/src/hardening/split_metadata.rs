@@ -215,7 +215,10 @@ mod tests {
         let meta_end = meta + sm.meta_size();
         let data = sm.base_ptr().as_ptr() as usize;
         let data_end = data + sm.region_size();
-        // The two regions must NOT overlap — that's the entire point.
+        // The two regions must NOT overlap — that's the isolation guarantee.
+        // Note: disjoint ≠ non-adjacent. This proves the cache/pollution
+        // isolation the type guarantees, not the (probabilistic, OS-placement-
+        // dependent) overflow isolation — see the module docs.
         assert!(
             meta_end <= data || data_end <= meta,
             "regions overlap: meta=[{meta:x}, {meta_end:x}) data=[{data:x}, {data_end:x})",
