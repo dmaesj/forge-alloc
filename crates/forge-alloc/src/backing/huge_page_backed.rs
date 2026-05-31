@@ -57,6 +57,35 @@ fn default_huge_page_size() -> usize {
     2 * 1024 * 1024
 }
 
+/// The granularity the mapping length must be a multiple of.
+///
+/// Normally this is just `hp_size`. On macOS x86_64 the superpage size is
+/// fixed at 2 MiB and `mmap(VM_FLAGS_SUPERPAGE_SIZE_ANY)` rejects any `len`
+/// that is not a 2 MiB multiple — regardless of the caller's `hp_size` (which
+/// that path otherwise ignores). A sub-2-MiB `hp_size` would otherwise round
+/// the length to a non-2-MiB multiple and hard-fail even when superpages are
+/// available, so we raise the granularity to the real superpage size there.
+///
+/// `hp_size` is always a power of two ≥ 4096 (validated by the caller), and
+/// 2 MiB is a power of two, so the result is always a power of two ≥ `hp_size`
+/// — keeping `& !(g - 1)` a valid round-up mask.
+#[inline]
+const fn rounding_granularity(hp_size: usize) -> usize {
+    #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+    {
+        let superpage = 2 * 1024 * 1024;
+        if hp_size > superpage {
+            hp_size
+        } else {
+            superpage
+        }
+    }
+    #[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
+    {
+        hp_size
+    }
+}
+
 /// OS-mapped anonymous region backed by huge / large pages.
 ///
 /// `min_size` is rounded up to a multiple of [`huge_page_size`](Self::huge_page_size)
@@ -107,9 +136,12 @@ impl HugePageBacked {
     ///
     /// On Linux, `hp_size` is encoded into the `mmap` flags via
     /// `MAP_HUGE_<size>` so the kernel draws from the matching pool
-    /// (e.g. 2 MiB vs 1 GiB). On macOS x86_64 the parameter is
-    /// effectively ignored — `VM_FLAGS_SUPERPAGE_SIZE_ANY` is the
-    /// only currently-meaningful selector. On Windows `hp_size` only
+    /// (e.g. 2 MiB vs 1 GiB). On macOS x86_64 the parameter does not
+    /// select a tier — `VM_FLAGS_SUPERPAGE_SIZE_ANY` (a fixed 2 MiB
+    /// superpage) is the only meaningful selector — but the mapping
+    /// length is still rounded up to at least 2 MiB there so the
+    /// superpage `mmap` cannot be handed a non-2-MiB length it would
+    /// reject. On Windows `hp_size` only
     /// affects size rounding, not the page tier (which is fixed by
     /// `GetLargePageMinimum()`).
     pub fn with_huge_page_size(min_size: usize, hp_size: usize) -> Result<Self, AllocError> {
@@ -117,10 +149,10 @@ impl HugePageBacked {
             capture_synthetic_einval();
             return Err(AllocError);
         }
-        let len = match min_size
-            .checked_add(hp_size - 1)
-            .map(|s| s & !(hp_size - 1))
-        {
+        // Round `min_size` up to the platform's *actual* mapping granularity
+        // (see `rounding_granularity`), which may exceed `hp_size`.
+        let round = rounding_granularity(hp_size);
+        let len = match min_size.checked_add(round - 1).map(|s| s & !(round - 1)) {
             Some(l) => l,
             None => {
                 capture_synthetic_einval();
@@ -541,6 +573,27 @@ mod tests {
         let s = default_huge_page_size();
         assert!(s.is_power_of_two());
         assert_eq!(s, 2 * 1024 * 1024, "default is 2 MiB");
+    }
+
+    /// The length-rounding granularity is always a power of two and never
+    /// below the requested `hp_size`, on every platform. On macOS x86_64 it
+    /// is additionally raised to the fixed 2 MiB superpage size so a sub-2-MiB
+    /// `hp_size` cannot produce a length the superpage `mmap` would reject.
+    #[test]
+    fn rounding_granularity_is_pow2_and_at_least_hp_size() {
+        for hp in [4096_usize, 1 << 20, 1 << 21, 1 << 30] {
+            let g = rounding_granularity(hp);
+            assert!(
+                g.is_power_of_two(),
+                "granularity {g} for hp_size={hp} not pow2"
+            );
+            assert!(g >= hp, "granularity {g} below hp_size={hp}");
+            #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+            assert!(
+                g >= 2 * 1024 * 1024,
+                "macOS x86_64 must round to >= 2 MiB superpage (hp_size={hp}, g={g})",
+            );
+        }
     }
 
     #[test]

@@ -118,8 +118,23 @@ impl NonZeroLayout {
     #[inline]
     pub const fn pad_to_align(&self) -> Self {
         let align = self.align.get();
+        // The plain `+` cannot overflow: `new` caps `size` at
+        // `isize::MAX - (align - 1)`, so `size + align - 1 <= isize::MAX`.
         let padded = (self.size.get() + align - 1) & !(align - 1);
-        // padded >= size > 0, so unwrap is sound.
+        // Pin that load-bearing coincidence: `isize::MAX - (align - 1)` is
+        // itself an `align`-multiple (since `isize::MAX + 1 = 2^63` is a
+        // multiple of every power-of-two align), so rounding the capped size
+        // up never exceeds it. This struct-literal bypasses `new`, so if a
+        // future change ever loosened `new`'s bound to `isize::MAX`, the
+        // result could violate `to_layout`'s `from_size_align_unchecked`
+        // precondition and feed UB to the real `Global`. Catch that here.
+        debug_assert!(
+            padded <= (isize::MAX as usize) - (align - 1),
+            "pad_to_align: padded size exceeds the isize::MAX layout bound",
+        );
+        // `padded >= size.get() > 0`, so `NonZeroUsize::new` is provably
+        // `Some`; the `None` arm is unreachable (kept only because `?`/unwrap
+        // aren't available in this `const fn`).
         let size = match NonZeroUsize::new(padded) {
             Some(s) => s,
             None => self.size,

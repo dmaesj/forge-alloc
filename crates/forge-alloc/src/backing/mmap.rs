@@ -489,9 +489,26 @@ unsafe impl OsBacked for MmapBacked {
 
     #[inline]
     unsafe fn release_pages(&self, ptr: NonNull<u8>, size: usize) {
+        // On a Windows `lazy_commit` mapping, pages past the commit high-water
+        // mark are reserved-but-uncommitted, and `VirtualAlloc(MEM_RESET)`
+        // rejects uncommitted pages with ERROR_INVALID_PARAMETER — a silent
+        // no-op that also leaves a stale error on the `mmap_last_os_error`
+        // probe. Clamp the release range to the committed prefix so the reset
+        // only ever touches committed pages. For eager mappings `committed ==
+        // len`, so this is a no-op; on Unix `madvise` tolerates untouched
+        // pages, so clamping there only avoids redundant work.
+        //
+        // SAFETY: `!Sync` single-writer — exclusive access to the `committed`
+        // watermark, the same contract `commit` relies on.
+        let committed = unsafe { *self.committed.get() };
+        let off = (ptr.as_ptr() as usize).saturating_sub(self.ptr.as_ptr() as usize);
+        let clamped = off.saturating_add(size).min(committed).saturating_sub(off);
+        if clamped == 0 {
+            return;
+        }
         // SAFETY: caller has promised [ptr, ptr+size) lies wholly inside our
-        // region and has no live allocations.
-        unsafe { os_release_pages(ptr, size) };
+        // region and has no live allocations; clamping only shrinks the range.
+        unsafe { os_release_pages(ptr, clamped) };
     }
 
     #[inline]
@@ -543,7 +560,16 @@ pub fn page_size() -> usize {
     // of 16K, then mmap would still align internally to 16K. The behavioral
     // consequence is over-reservation at the round-up step, not unsoundness.
     let p = unsafe { libc::sysconf(libc::_SC_PAGESIZE) };
-    let ps = if p > 0 { p as usize } else { 4096 };
+    // The returned value must be a power of two: the round-up masks downstream
+    // (`with_flags`, `os_commit`, `allocate`) all use `& !(page - 1)`, which is
+    // only a correct "round up to page" mask when `page` is a power of two. A
+    // pathological positive-but-non-pow2 value would pass a bare `> 0` guard yet
+    // silently round *down*, undersizing the mapping. Reject it here at the one
+    // chokepoint so every downstream mask has an enforced precondition.
+    let ps = match usize::try_from(p) {
+        Ok(p) if p > 0 && p.is_power_of_two() => p,
+        _ => 4096,
+    };
     CACHED.store(ps, Ordering::Relaxed);
     ps
 }
@@ -577,8 +603,16 @@ pub fn page_size() -> usize {
     // `dwPageSize` is documented to be non-zero on all supported Windows
     // editions; the explicit fallback is purely defensive so a degenerate
     // value can never trigger `page - 1` underflow in `with_flags`.
+    // Must be a power of two: the round-up masks downstream (`with_flags`,
+    // `os_commit`, `allocate`) all use `& !(page - 1)`, which only rounds up
+    // correctly when `page` is a power of two. Reject a degenerate non-pow2
+    // value here at the one chokepoint rather than assuming it everywhere.
     let p = info.dwPageSize as usize;
-    let ps = if p > 0 { p } else { 4096 };
+    let ps = if p > 0 && p.is_power_of_two() {
+        p
+    } else {
+        4096
+    };
     CACHED.store(ps, Ordering::Relaxed);
     ps
 }
@@ -691,6 +725,15 @@ unsafe fn os_commit(
         // eager mapping whose watermark starts at `region_len`).
         return Ok(());
     }
+    // Commit contiguously from the current watermark up to `end_paged`,
+    // NOT from `offset`. This fills any gap between `already` and `offset`,
+    // so the committed prefix `[base, base + committed)` stays contiguous no
+    // matter what order callers request offsets in: a high `offset` eagerly
+    // commits everything below it. That is why a single high-water `usize` is
+    // a sufficient witness of committedness — it never has to track holes.
+    // (The trade-off: committing a far offset first over-commits the gap.
+    // In-tree callers — BumpArena, StackAlloc, allocate — are monotonic, so
+    // no gap is ever created in practice.)
     // SAFETY: `already <= region_len` (watermark invariant) so the offset is
     // in-bounds of the reserved region.
     let commit_base = unsafe { base.as_ptr().add(already) };
