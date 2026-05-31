@@ -7,8 +7,26 @@
 //! exposes the metadata region via [`meta_base`](SplitMetadata::meta_base)
 //! and [`meta_size`](SplitMetadata::meta_size) for callers (typically a
 //! hardened slab) that want to keep their free-list / block-state /
-//! canary storage out of the data region's cache lines and out of
-//! reach of linear overflows past user allocations.
+//! canary storage in an *unrelated* mapping rather than interleaved with
+//! the data region's cache lines.
+//!
+//! # What this does and does not guarantee
+//!
+//! Metadata lives in a **separate `mmap`** at an unrelated virtual
+//! address, so it cannot be polluted by, or share cache lines with, the
+//! data region. That is the guarantee.
+//!
+//! It does **not** by itself guarantee that a *linear overflow* past a
+//! data allocation cannot reach metadata: the two mappings come from two
+//! independent `mmap`/`VirtualAlloc` calls and the OS is free to place
+//! them adjacent in the address space, so overflow isolation is
+//! *probabilistic* (it holds under ASLR but is not enforced here). For a
+//! **hard** overflow barrier, compose with [`GuardPage`] on the data side
+//! (`GuardPage<SplitMetadata<MmapBacked>>`) — the `#[must_use]` on this
+//! type nudges toward exactly that recipe — which traps an overflow with
+//! a fault before it can reach anything, adjacent or not.
+//!
+//! [`GuardPage`]: crate::hardening::GuardPage
 //!
 //! See `docs/ARCHITECTURE.md` for design context.
 
@@ -21,8 +39,11 @@ use forge_alloc_core::{
 
 /// SplitMetadata wrapper.
 ///
-/// **Note**: this primitive guards only the *data* region from
-/// metadata pollution and adjacency overflows.
+/// **Note**: this primitive isolates allocator metadata into a separate
+/// mapping (cache-line / pollution separation). It does **not** by itself
+/// enforce that a linear overflow cannot reach metadata — two independent
+/// mmaps may land adjacent; see the module docs. For a hard overflow
+/// barrier, wrap the data side in [`GuardPage`](crate::hardening::GuardPage).
 ///
 /// Adding guard pages on top requires the **inner data region** to be
 /// `OsBacked` (so `GuardPage<SplitMetadata<MmapBacked>>` works, but
@@ -60,6 +81,12 @@ impl<I: Allocator> SplitMetadata<I> {
     /// Wrap with a pre-built metadata region. Useful when the caller
     /// wants to construct the meta `MmapBacked` with specific flags
     /// (huge pages, populate, etc.).
+    ///
+    /// **Precondition:** `meta_region` must not overlap the `data_region`'s
+    /// address range. A fresh `MmapBacked::new(..)` always satisfies this
+    /// (the OS returns a distinct mapping); the caveat exists only if you
+    /// hand in a region derived from the data side. Overlap would silently
+    /// defeat the isolation this type provides — it is not checked here.
     pub fn with_meta(data_region: I, meta_region: MmapBacked) -> Self {
         Self {
             meta_region,

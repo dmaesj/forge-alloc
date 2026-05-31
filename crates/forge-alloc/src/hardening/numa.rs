@@ -97,14 +97,11 @@ impl NodeSet {
         self.mask == 0
     }
 
-    /// Maximum node id known to be set + 1 (suitable as `maxnode` to
-    /// pass to `mbind`). `0` if the set is empty.
+    /// Highest node id set, plus one. `0` if the set is empty.
     ///
-    /// **Linux kernel quirk**: empirically the `mbind` syscall rejects
-    /// `maxnode = 1` with `EINVAL` even though a single-bit nodemask is
-    /// the documented minimum for "node 0 only". Always request at
-    /// least the full 64-bit-word range that matches our `u64`
-    /// nodemask field via [`mbind_maxnode`](Self::mbind_maxnode).
+    /// Informational only — the `mbind` path always passes
+    /// [`mbind_maxnode`](Self::mbind_maxnode) (a constant 64), not this
+    /// value. Exposed for callers that want to know the occupied range.
     #[inline]
     pub fn max_node_plus_one(&self) -> u32 {
         if self.mask == 0 {
@@ -114,23 +111,41 @@ impl NodeSet {
         }
     }
 
-    /// `maxnode` value to pass to `mbind`. Matches the full size of the
-    /// `u64` nodemask we hand the kernel (64), so the kernel reads
-    /// exactly our 8 bytes — works around the `EINVAL` regression on
-    /// small node sets noted on [`max_node_plus_one`](Self::max_node_plus_one).
+    /// `maxnode` value to pass to `mbind`. `mbind`'s `maxnode` is the
+    /// *number of bits* in the nodemask; the kernel reads
+    /// `ceil(maxnode / bits_per_long)` words. We hand the kernel a single
+    /// `u64`, so `maxnode = 64` makes it read exactly those 8 bytes —
+    /// independent of how many low bits are actually set.
     #[inline]
     pub fn mbind_maxnode(&self) -> u32 {
         64
     }
 }
 
-impl NumaPolicy {
-    /// Get the policy's node set (for Bind and Interleaved); `None`
-    /// for Preferred (which encodes the single node directly).
-    fn nodes(&self) -> Option<&NodeSet> {
-        match self {
-            Self::Bind(s) | Self::Interleaved(s) => Some(s),
-            Self::Preferred(_) => None,
+// Linux `mbind` mode constants (from <linux/mempolicy.h>). Defined at module
+// scope — not just inside the Linux `apply_policy` — so the policy → syscall-
+// args mapping below is unit-testable on every platform.
+const MPOL_PREFERRED: i32 = 1;
+const MPOL_BIND: i32 = 2;
+const MPOL_INTERLEAVE: i32 = 3;
+
+/// Pure mapping from a [`NumaPolicy`] to the `mbind` arguments
+/// `(mode, nodemask, maxnode)`.
+///
+/// Returns `Err(AllocError)` for an invalid policy — an empty `Bind` /
+/// `Interleaved` node set, or a `Preferred` node id `>= 64`. Because this is
+/// platform-independent, the nodemask construction (and the rejection of
+/// invalid policies) is exercised by tests on *every* host, not only Linux —
+/// the syscall itself is no-op'd off-Linux, so without this split the bitmask
+/// build would be untested on the CI host.
+fn mbind_args(policy: &NumaPolicy) -> Result<(i32, u64, u32), AllocError> {
+    match policy {
+        NumaPolicy::Bind(s) | NumaPolicy::Interleaved(s) if s.is_empty() => Err(AllocError),
+        NumaPolicy::Bind(s) => Ok((MPOL_BIND, s.mask(), s.mbind_maxnode())),
+        NumaPolicy::Interleaved(s) => Ok((MPOL_INTERLEAVE, s.mask(), s.mbind_maxnode())),
+        NumaPolicy::Preferred(n) => {
+            let s = NodeSet::single(*n).ok_or(AllocError)?;
+            Ok((MPOL_PREFERRED, s.mask(), s.mbind_maxnode()))
         }
     }
 }
@@ -151,13 +166,12 @@ impl<I: OsBacked> NumaLocal<I> {
     /// — caller can inspect with [`policy`](Self::policy) but the
     /// region's physical placement is the kernel's default.
     pub fn new(inner: I, policy: NumaPolicy) -> Result<Self, AllocError> {
-        if policy.nodes().is_some_and(NodeSet::is_empty) {
-            // Empty node set for Bind/Interleaved would either error
-            // at the kernel (Linux) or be a no-op (elsewhere); reject
-            // up front so the caller's intent is clear.
-            return Err(AllocError);
-        }
-        apply_policy(&inner, &policy)?;
+        // Validate the policy on EVERY platform (not just Linux) so an empty
+        // Bind/Interleaved set or an out-of-range `Preferred` node is rejected
+        // uniformly — previously `Preferred(huge)` was accepted off-Linux
+        // because the only range check lived inside the Linux syscall path.
+        let args = mbind_args(&policy)?;
+        apply_policy(&inner, args)?;
         Ok(Self { inner, policy })
     }
 
@@ -247,40 +261,26 @@ impl<I: OsBacked + FixedRange> FixedRange for NumaLocal<I> {
 // ============================================================================
 
 #[cfg(target_os = "linux")]
-fn apply_policy<I: OsBacked>(inner: &I, policy: &NumaPolicy) -> Result<(), AllocError> {
-    // Linux `mbind` mode constants (from <linux/mempolicy.h>):
-    const MPOL_DEFAULT: i32 = 0;
-    const MPOL_PREFERRED: i32 = 1;
-    const MPOL_BIND: i32 = 2;
-    const MPOL_INTERLEAVE: i32 = 3;
-    let _ = MPOL_DEFAULT; // for completeness/future use
-
+fn apply_policy<I: OsBacked>(inner: &I, args: (i32, u64, u32)) -> Result<(), AllocError> {
+    let (mode, mask, maxnode) = args;
     let base = inner.base_ptr().as_ptr() as *mut libc::c_void;
     let size = inner.region_size();
-    let (mode, mask, maxnode) = match policy {
-        NumaPolicy::Bind(s) => (MPOL_BIND, s.mask(), s.mbind_maxnode()),
-        NumaPolicy::Interleaved(s) => (MPOL_INTERLEAVE, s.mask(), s.mbind_maxnode()),
-        NumaPolicy::Preferred(n) => {
-            let s = match NodeSet::single(*n) {
-                Some(s) => s,
-                None => return Err(AllocError),
-            };
-            (MPOL_PREFERRED, s.mask(), s.mbind_maxnode())
-        }
-    };
     // mbind's `nodemask` is an array of unsigned longs (bitmap).
     // For up to 64 nodes a single u64 suffices.
     let nodemask: u64 = mask;
     // SAFETY: the FFI signature for SYS_mbind matches the kernel's
-    // ABI: (addr, len, mode, nodemask_ptr, maxnode, flags).
+    // ABI: (unsigned long start, unsigned long len, unsigned long mode,
+    // const unsigned long *nodemask, unsigned long maxnode, unsigned flags).
+    // `mode` is passed as `c_ulong` to match the kernel's `unsigned long mode`
+    // (values 1–3, but the width must match the ABI, not just the value).
     let rc = unsafe {
         libc::syscall(
             libc::SYS_mbind,
             base,
             size as libc::c_ulong,
-            mode as libc::c_int,
+            mode as libc::c_ulong,
             &nodemask as *const u64,
-            // mbind's `maxnode` is the highest *bit position* + 1.
+            // mbind's `maxnode` is the nodemask width in bits.
             maxnode as libc::c_ulong,
             0u32 as libc::c_uint,
         )
@@ -298,10 +298,12 @@ fn apply_policy<I: OsBacked>(inner: &I, policy: &NumaPolicy) -> Result<(), Alloc
 }
 
 #[cfg(not(target_os = "linux"))]
-fn apply_policy<I: OsBacked>(_inner: &I, _policy: &NumaPolicy) -> Result<(), AllocError> {
+fn apply_policy<I: OsBacked>(_inner: &I, _args: (i32, u64, u32)) -> Result<(), AllocError> {
     // macOS, Windows, BSD, other Unix: no equivalent operation on an
     // already-mapped region. Return Ok so the wrapper compiles and the
-    // type is still useful as a marker / future-extension point.
+    // type is still useful as a marker / future-extension point. (Policy
+    // validity was already checked by `mbind_args` in `new`, so an invalid
+    // policy is rejected here too, not only on Linux.)
     Ok(())
 }
 
@@ -416,6 +418,56 @@ mod tests {
         let inner = MmapBacked::new(64 * 1024).unwrap();
         let res = NumaLocal::new(inner, NumaPolicy::Preferred(0));
         assert!(res.is_ok());
+    }
+
+    // The following tests exercise the policy → mbind-args mapping (mode +
+    // nodemask + maxnode) directly. They run on EVERY platform, including the
+    // Windows CI host where the syscall path is a no-op — so the bitmask
+    // construction is no longer untested off-Linux.
+
+    #[test]
+    fn mbind_args_bind_builds_nodemask() {
+        let s = NodeSet::single(0).unwrap().with(3).unwrap();
+        let (mode, mask, maxnode) = mbind_args(&NumaPolicy::Bind(s)).unwrap();
+        assert_eq!(mode, MPOL_BIND);
+        assert_eq!(mask, 0b1001);
+        assert_eq!(maxnode, 64);
+    }
+
+    #[test]
+    fn mbind_args_interleaved_builds_nodemask() {
+        let s = NodeSet::single(1).unwrap();
+        let (mode, mask, maxnode) = mbind_args(&NumaPolicy::Interleaved(s)).unwrap();
+        assert_eq!(mode, MPOL_INTERLEAVE);
+        assert_eq!(mask, 0b10);
+        assert_eq!(maxnode, 64);
+    }
+
+    #[test]
+    fn mbind_args_preferred_single_node() {
+        let (mode, mask, maxnode) = mbind_args(&NumaPolicy::Preferred(2)).unwrap();
+        assert_eq!(mode, MPOL_PREFERRED);
+        assert_eq!(mask, 0b100);
+        assert_eq!(maxnode, 64);
+    }
+
+    #[test]
+    fn mbind_args_rejects_empty_and_out_of_range() {
+        assert!(mbind_args(&NumaPolicy::Bind(NodeSet::empty())).is_err());
+        assert!(mbind_args(&NumaPolicy::Interleaved(NodeSet::empty())).is_err());
+        assert!(mbind_args(&NumaPolicy::Preferred(64)).is_err());
+        assert!(mbind_args(&NumaPolicy::Preferred(9999)).is_err());
+    }
+
+    /// `Preferred` with an out-of-range node must be rejected by `new` on
+    /// every platform — previously it was accepted off-Linux because the only
+    /// range check lived inside the Linux syscall path.
+    #[test]
+    #[cfg_attr(miri, ignore = "miri-incompatible: mmap / threads")]
+    fn preferred_out_of_range_node_rejected_uniformly() {
+        let inner = MmapBacked::new(64 * 1024).unwrap();
+        let res = NumaLocal::new(inner, NumaPolicy::Preferred(9999));
+        assert!(res.is_err(), "out-of-range Preferred node must be rejected");
     }
 
     #[test]

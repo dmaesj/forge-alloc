@@ -60,6 +60,15 @@ impl<I: OsBacked> GuardPage<I> {
         if base_addr & (page_size - 1) != 0 {
             return Err(AllocError);
         }
+        // The tail guard sits at `base + region_size - page_size`; that address
+        // is only page-aligned if `region_size` is a multiple of `page_size`.
+        // `OsBacked` requires a page-rounded `region_size`, but verify it here
+        // so a non-conforming backing can't yield a misaligned `protect` range
+        // (which on Unix rounds the start down and would silently extend
+        // PROT_NONE into the usable region).
+        if region_size & (page_size - 1) != 0 {
+            return Err(AllocError);
+        }
 
         // Install guards.
         // The `protect` trait is infallible-by-signature, but the underlying
@@ -257,5 +266,107 @@ mod tests {
         let g = GuardPage::new(inner, page_size()).unwrap();
         assert_eq!(g.base().as_ptr() as usize, inner_base + page_size());
         assert_eq!(g.size(), inner_size - 2 * page_size());
+    }
+
+    /// Backing that wraps a real `MmapBacked` but whose `protect` always fails
+    /// — it provokes a genuine OS error and records it into the shared
+    /// last-error slot, exactly as a failed mprotect/VirtualProtect would
+    /// inside the real backing. Used to prove `GuardPage::new` aborts on a
+    /// guard-install failure instead of silently shipping writable guards.
+    struct FailingProtect(MmapBacked);
+
+    unsafe impl Deallocator for FailingProtect {
+        unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: NonZeroLayout) {
+            // SAFETY: forwarded to the real backing.
+            unsafe { self.0.deallocate(ptr, layout) }
+        }
+    }
+    unsafe impl Allocator for FailingProtect {
+        fn allocate(&self, layout: NonZeroLayout) -> Result<NonNull<[u8]>, AllocError> {
+            self.0.allocate(layout)
+        }
+    }
+    unsafe impl OsBacked for FailingProtect {
+        fn base_ptr(&self) -> NonNull<u8> {
+            self.0.base_ptr()
+        }
+        fn region_size(&self) -> usize {
+            self.0.region_size()
+        }
+        unsafe fn release_pages(&self, ptr: NonNull<u8>, size: usize) {
+            // SAFETY: forwarded to the real backing.
+            unsafe { self.0.release_pages(ptr, size) }
+        }
+        unsafe fn protect(&self, _ptr: NonNull<u8>, _size: usize, _flags: ProtectFlags) {
+            // Provoke a real OS error (open a path that cannot exist) and
+            // capture it into the shared slot — the same recording path a
+            // genuine guard-install failure takes inside `MmapBacked`.
+            let _ = std::fs::File::open("__forge_alloc_guard_install_should_fail__");
+            crate::backing::mmap_record_os_error();
+        }
+    }
+
+    #[test]
+    #[cfg_attr(miri, ignore = "miri-incompatible: mmap")]
+    fn construct_aborts_when_guard_protect_fails() {
+        let inner = FailingProtect(MmapBacked::new(64 * 1024).unwrap());
+        // The head-guard `protect` records an error; `new` must detect it and
+        // return Err rather than hand back writable "guard" pages — the
+        // security-critical abort path, previously untested.
+        assert!(
+            GuardPage::new(inner, page_size()).is_err(),
+            "GuardPage::new must abort when a guard protect fails",
+        );
+    }
+
+    /// The security premise itself: writing into either guard page must fault.
+    /// `fork()` a child that writes one byte into the guard; the kernel kills
+    /// it with SIGSEGV/SIGBUS. The parent asserts the child was signalled
+    /// rather than exiting cleanly (a clean exit ⇒ the guard was writable).
+    /// Unix-only — the trap mechanism is platform-specific.
+    #[cfg(unix)]
+    mod trap {
+        use super::*;
+
+        /// # Safety
+        /// `addr` must be an address the caller expects to be unmapped /
+        /// protected; the child writes one byte there.
+        unsafe fn child_faults_writing(addr: *mut u8) -> bool {
+            // SAFETY: fork in a test; the child does only async-signal-safe
+            // work (a volatile write that faults, then `_exit`).
+            let pid = unsafe { libc::fork() };
+            assert!(pid >= 0, "fork failed");
+            if pid == 0 {
+                unsafe {
+                    core::ptr::write_volatile(addr, 0xFFu8);
+                    // Reached only if the write did NOT fault.
+                    libc::_exit(0);
+                }
+            }
+            let mut status: libc::c_int = 0;
+            // SAFETY: valid out-pointer; pid is our child.
+            unsafe { libc::waitpid(pid, &mut status, 0) };
+            libc::WIFSIGNALED(status)
+                && (libc::WTERMSIG(status) == libc::SIGSEGV
+                    || libc::WTERMSIG(status) == libc::SIGBUS)
+        }
+
+        #[test]
+        #[cfg_attr(miri, ignore = "miri-incompatible: mmap / fork / signals")]
+        fn head_and_tail_guards_trap_on_access() {
+            let inner = MmapBacked::new(64 * 1024).unwrap();
+            let inner_base = inner.base_ptr().as_ptr();
+            let region = inner.region_size();
+            let ps = page_size();
+            let g = GuardPage::new(inner, ps).unwrap();
+            unsafe {
+                // Last byte of the leading guard (just below the usable base).
+                let head = g.base().as_ptr().sub(1);
+                assert!(child_faults_writing(head), "head guard did not trap");
+                // First byte of the trailing guard.
+                let tail = inner_base.add(region - ps);
+                assert!(child_faults_writing(tail), "tail guard did not trap");
+            }
+        }
     }
 }
