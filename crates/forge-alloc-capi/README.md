@@ -13,8 +13,9 @@ targets down to Cortex-M and wasm.
 `forge_bump_free()` scrubs the freed block with forge-alloc's poison pattern
 (`0xDE`) so a stale secret can't be recovered through a use-after-free read.
 
-> **Status:** provisional ABI, `publish = false`. Pinned, stable, and ready to
-> use locally; not yet on crates.io.
+> **Status:** published as a provisional `0.1.x`. The ABI (handle size,
+> function set) is not yet frozen and may change in a breaking way before 1.0,
+> which `0.x` semver permits — pin a minor version if that matters to you.
 
 ## API
 

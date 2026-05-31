@@ -9,9 +9,8 @@ repository.workspace   = true
 readme      = "README.md"
 keywords    = ["allocator", "ffi", "no-std", "embedded", "c-api"]
 categories  = ["memory-management", "no-std", "external-ffi-bindings"]
-# Provisional ABI; not published yet. Flip to publishable once the C
-# surface has stabilized and had external use.
-publish     = false
+# Published as a provisional 0.1.x. The ABI (handle size, function set) is not
+# frozen and may change in a breaking way before 1.0 — which 0.x semver permits.
 
 [lib]
 # `lib` so the Rust integration tests can link the crate; `staticlib` for

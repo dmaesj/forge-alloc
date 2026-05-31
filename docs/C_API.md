@@ -69,12 +69,12 @@ This is the narrow slice of "forge-alloc, callable from C" that is both
 
 ## ABI stability
 
-`publish = false` and the ABI is provisional: the handle size
-(`FORGE_BUMP_STORAGE`) and the function set may change before a 1.0. A
-compile-time assertion in the crate guarantees the real allocator fits the
-handle storage, so a layout change can't silently corrupt caller memory — it
-fails the build instead. The intent is to stabilize and publish once the
-surface has had real external use.
+Published as a provisional `0.1.x`: the handle size (`FORGE_BUMP_STORAGE`) and
+the function set may change in a breaking way before 1.0, which `0.x` semver
+permits — pin a minor version if that matters. A compile-time assertion in the
+crate guarantees the real allocator fits the handle storage, so a layout change
+can't silently corrupt caller memory — it fails the build instead. The ABI will
+be frozen for 1.0 once the surface has had real external use.
 
 ## Verification
 

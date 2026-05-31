@@ -8,7 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-- **`forge-alloc-capi`** (new crate, `publish = false`): a C ABI over
+- **`forge-alloc-capi`** (new crate, `0.1.0`): a C ABI over
   `forge-alloc` for C/C++, aimed at embedded users. Exposes a hardened bump
   arena over a caller-provided buffer (`BumpArena<StaticBacked>`) — no global
   allocator, no syscalls, `#![no_std]`-capable down to Cortex-M / wasm.
