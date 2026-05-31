@@ -673,6 +673,11 @@ mod tests {
         let cj = build_mmap();
         let layout = NonZeroLayout::from_size_align(8, 128).unwrap();
         let base = cj.inner().base().as_ptr() as usize;
+        // NOTE: this must be the FIRST allocation against the fresh arena — the
+        // `< 64` discriminator below assumes the bump cursor is at 0 so a
+        // pass-through alloc lands at `base + 0`. Do not add a warm-up alloc
+        // before this point, or the offset will exceed one cache line and the
+        // assertion will false-fail.
         let block = cj.allocate(layout).expect("mmap base satisfies align=128");
         let user_ptr = block.cast::<u8>().as_ptr();
         let addr = user_ptr as usize;
