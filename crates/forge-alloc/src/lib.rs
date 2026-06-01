@@ -182,20 +182,27 @@ pub type HardenedSlab<T, M = NoProtection> = Slab<T, GuardPage<SplitMetadata<Mma
 /// `ZeroizeOnFree<Slab<T, GuardPage<SplitMetadata<LockedMmapBacked>>, M>>`.
 ///
 /// It adds two crypto-specific guarantees on top of [`HardenedSlab`]:
-/// - **No swap / no core dump (Linux):** the data region is
-///   [`LockedMmapBacked`] — `mlock`/`VirtualLock` pins the secret pages in RAM
-///   (never paged to swap) and `MADV_DONTDUMP` excludes them from core dumps on
-///   Linux. Construction **fails closed** if the lock cannot be taken
+/// - **No swap:** the data region is [`LockedMmapBacked`] — `mlock` /
+///   `VirtualLock` pins the secret pages in RAM so they never page to swap.
+///   Construction **fails closed** if the lock cannot be taken
 ///   (`RLIMIT_MEMLOCK` / missing privilege), never silently leaving secrets
 ///   swappable.
+/// - **Core-dump exclusion (Linux, best-effort):** on Linux `MADV_DONTDUMP` is
+///   applied after the lock so the secret pages are excluded from core dumps.
+///   It is best-effort — a `madvise` failure is ignored (the lock is the hard
+///   guarantee). **There is no equivalent on Windows / other Unix** — set
+///   `RLIMIT_CORE = 0` (or the platform equivalent) if you require it there.
 /// - **Scrub on free:** [`ZeroizeOnFree`] volatile-zeroes a freed slot so a
 ///   secret does not linger in RAM after `deallocate`. It sits outermost so the
 ///   scrub runs before the slab writes its freelink.
 ///
-/// Plus everything [`HardenedSlab`] already provides: guard pages trap linear
-/// overflow into/out of the secret region, out-of-line metadata keeps the
-/// freelist/headers away from the secret bytes, and the optional freelist MAC
-/// `M` (e.g. `SipHashMAC` under `--features siphasher`) detects forged links.
+/// Plus everything [`HardenedSlab`] already provides: guard pages trap a linear
+/// overflow into/out of the secret region with a fault, [`SplitMetadata`]
+/// isolates allocator metadata into a separate, cache-line-disjoint mapping, and
+/// the optional freelist MAC `M` (e.g. `SipHashMAC` under `--features siphasher`)
+/// detects forged links. Note the slab's freelist links live **inline** in freed
+/// slots (the locked region), not in the metadata mapping; because the scrub
+/// runs first, after a free those bytes hold link data, never a secret.
 ///
 /// **Construction** (build the inner hardened slab over a locked backing, then
 /// wrap in [`ZeroizeOnFree`]):

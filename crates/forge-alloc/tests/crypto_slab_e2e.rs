@@ -10,10 +10,15 @@
 //! in **non-elidable scrub-on-free** (`ZeroizeOnFree`). It proves the two crypto
 //! halves compose with the hardened slab into a usable secret allocator:
 //!
-//! - secrets never page to swap (lock) and are excluded from core dumps (Linux);
+//! - secrets never page to swap (lock) and are excluded from core dumps
+//!   (Linux, best-effort `MADV_DONTDUMP`);
 //! - secrets are volatile-zeroed on free (scrub);
-//! - linear overflow into/out of the secret region traps (guard pages);
-//! - the slab freelist/headers live away from the secret bytes (split metadata).
+//! - linear overflow into/out of the secret region traps (guard pages).
+//!
+//! (The slab's freelist links live inline in freed slots, in the locked
+//! region; the scrub runs first, so after a free those bytes hold link data,
+//! not a secret. `SplitMetadata` provides cache-line isolation of allocator
+//! metadata, matching the `HardenedSlab` stack.)
 
 #![cfg(feature = "std")]
 
@@ -40,7 +45,17 @@ fn build_crypto_pool() -> Option<CryptoPool> {
     //    letting the test actually exercise the lock in unprivileged CI rather
     //    than skip. (Only this data region is locked; the metadata region is a
     //    separate unlocked mapping and does not count toward the limit.)
-    let locked = LockedMmapBacked::new(32 * 1024).ok()?;
+    let locked = match LockedMmapBacked::new(32 * 1024) {
+        Ok(l) => l,
+        Err(_) => {
+            // Make the skip visible in CI logs rather than silently passing.
+            eprintln!(
+                "NOTE: skipping crypto_slab_e2e — mlock not permitted in this \
+                 environment (RLIMIT_MEMLOCK / privilege)"
+            );
+            return None;
+        }
+    };
     // 2. Out-of-line metadata: the slab freelist/headers live in a separate
     //    region, away from the secret data.
     let split = SplitMetadata::new(locked, 16 * 1024).ok()?;
