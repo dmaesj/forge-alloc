@@ -56,8 +56,9 @@ fn build_crypto_pool() -> Option<CryptoPool> {
             return None;
         }
     };
-    // 2. Out-of-line metadata: the slab freelist/headers live in a separate
-    //    region, away from the secret data.
+    // 2. SplitMetadata: cache-line isolation of allocator bookkeeping in a
+    //    separate mapping (matching the HardenedSlab stack). The slab's own
+    //    freelist links stay inline in the slots, in the locked region.
     let split = SplitMetadata::new(locked, 16 * 1024).ok()?;
     // 3. Guard pages trap linear overflow into/out of the secret region.
     let guarded = GuardPage::new(split, page_size()).ok()?;
