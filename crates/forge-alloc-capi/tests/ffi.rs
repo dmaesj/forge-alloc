@@ -159,18 +159,22 @@ fn tiny_buffer_boundary() {
     }
 }
 
-/// A large alignment that exceeds the buffer fails cleanly (NULL); a satisfiable
-/// large alignment returns a correctly-aligned pointer.
+/// A large alignment is handled cleanly: the arena returns either NULL (it
+/// cannot satisfy the request) or a correctly-aligned, in-bounds pointer —
+/// never UB. A satisfiable smaller alignment is always honored.
 #[test]
 fn over_alignment_handling() {
     let mut buf = [0u8; 256];
+    let base = buf.as_ptr() as usize;
     let mut handle = MaybeUninit::<ForgeBump>::uninit();
     let h = handle.as_mut_ptr();
     unsafe {
         assert_eq!(forge_bump_init(h, buf.as_mut_ptr().cast(), buf.len()), 1);
-        // Alignment far larger than the whole buffer: clean failure, no UB.
-        assert!(forge_bump_alloc(h, 8, 4096).is_null());
-        // A 64-byte alignment fits in 256 bytes and must be honored.
+
+        // A 64-byte alignment always fits in a 256-byte buffer (the first
+        // 64-aligned address is at most base+63, leaving room for 8 bytes), so
+        // it must be honored. Checked FIRST on the fresh arena so its outcome
+        // can't depend on the over-alignment probe below.
         let p = forge_bump_alloc(h, 8, 64);
         assert!(!p.is_null());
         assert_eq!(
@@ -178,6 +182,29 @@ fn over_alignment_handling() {
             0,
             "returned pointer must meet the requested alignment"
         );
+
+        // A 4096-byte alignment far exceeds the 256-byte buffer. Whether it can
+        // be satisfied depends on the buffer's runtime address: a buffer that
+        // happens to be page-aligned (or straddles a page boundary with room to
+        // spare) can legitimately serve an 8-byte/4096-aligned block, while a
+        // typically-aligned buffer cannot. Either way the contract is the same —
+        // NULL or a valid, page-aligned, in-bounds pointer, never UB. (Hard-
+        // asserting NULL here was a latent flaky assumption: it failed whenever
+        // the stack buffer landed page-aligned.)
+        let big = forge_bump_alloc(h, 8, 4096);
+        if !big.is_null() {
+            let addr = big as usize;
+            assert_eq!(
+                addr % 4096,
+                0,
+                "a non-NULL over-aligned block must be aligned"
+            );
+            assert!(
+                addr >= base && addr + 8 <= base + buf.len(),
+                "a non-NULL over-aligned block must lie within the buffer"
+            );
+        }
+
         forge_bump_destroy(h);
     }
 }
