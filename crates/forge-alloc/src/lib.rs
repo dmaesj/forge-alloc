@@ -173,3 +173,47 @@ pub use hardening::LogHandler;
 /// enabled, `PacMAC` is available as the parameter.
 #[cfg(all(feature = "std", any(unix, windows)))]
 pub type HardenedSlab<T, M = NoProtection> = Slab<T, GuardPage<SplitMetadata<MmapBacked>>, M>;
+
+/// The [`HardenedSlab`] security stack over **RAM-locked, core-dump-excluded**
+/// memory, wrapped in **non-elidable scrub-on-free** — the recommended
+/// composition for **cryptographic key material** ("crypto allocator").
+///
+/// Expansion:
+/// `ZeroizeOnFree<Slab<T, GuardPage<SplitMetadata<LockedMmapBacked>>, M>>`.
+///
+/// It adds two crypto-specific guarantees on top of [`HardenedSlab`]:
+/// - **No swap / no core dump (Linux):** the data region is
+///   [`LockedMmapBacked`] — `mlock`/`VirtualLock` pins the secret pages in RAM
+///   (never paged to swap) and `MADV_DONTDUMP` excludes them from core dumps on
+///   Linux. Construction **fails closed** if the lock cannot be taken
+///   (`RLIMIT_MEMLOCK` / missing privilege), never silently leaving secrets
+///   swappable.
+/// - **Scrub on free:** [`ZeroizeOnFree`] volatile-zeroes a freed slot so a
+///   secret does not linger in RAM after `deallocate`. It sits outermost so the
+///   scrub runs before the slab writes its freelink.
+///
+/// Plus everything [`HardenedSlab`] already provides: guard pages trap linear
+/// overflow into/out of the secret region, out-of-line metadata keeps the
+/// freelist/headers away from the secret bytes, and the optional freelist MAC
+/// `M` (e.g. `SipHashMAC` under `--features siphasher`) detects forged links.
+///
+/// **Construction** (build the inner hardened slab over a locked backing, then
+/// wrap in [`ZeroizeOnFree`]):
+/// ```rust,ignore
+/// use forge_alloc::{
+///     CryptoSlab, GuardPage, LockedMmapBacked, page_size, Slab, SplitMetadata, ZeroizeOnFree,
+/// };
+/// let locked  = LockedMmapBacked::new(32 * 1024)?;          // fails closed if it can't lock
+/// let split   = SplitMetadata::new(locked, 16 * 1024)?;
+/// let guarded = GuardPage::new(split, page_size())?;
+/// let pool: CryptoSlab<[u8; 64]> = ZeroizeOnFree::new(Slab::new(64, guarded)?);
+/// ```
+///
+/// **Threat-model boundary** (see [`LockedMmapBacked`] for the full list): the
+/// lock prevents *swap*, not hibernation (suspend-to-disk writes all of RAM),
+/// `fork()` COW, or `ptrace`. Only the **data** region is locked — the
+/// [`SplitMetadata`] metadata region and the freelist-MAC key (held in the slab
+/// struct) are unlocked, which is intended (neither holds the user's secret).
+#[cfg(all(feature = "std", any(unix, windows)))]
+pub type CryptoSlab<T, M = NoProtection> =
+    ZeroizeOnFree<Slab<T, GuardPage<SplitMetadata<LockedMmapBacked>>, M>>;

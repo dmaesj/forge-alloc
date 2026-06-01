@@ -223,6 +223,19 @@ session tokens, replace `Slab<Token, _>` with
 `HardenedSlab<Key, SipHashMAC>` (guard pages + split metadata +
 freelist MAC). See Recipe 6 for the hardened-allocator usage.
 
+For **secrets that must never reach disk** (private keys, symmetric
+keys, passwords), escalate one further to `CryptoSlab<Key, SipHashMAC>`
+— the same hardened stack but over `LockedMmapBacked` (`mlock` /
+`VirtualLock` so the pages never swap, plus `MADV_DONTDUMP` to exclude
+them from core dumps on Linux) and wrapped in `ZeroizeOnFree` (freed
+secrets are volatile-zeroed). It **fails closed**: if the memory cannot
+be locked (`RLIMIT_MEMLOCK` / missing privilege) construction returns
+`Err` rather than silently leaving secrets swappable. Note the
+threat-model boundary documented on the `CryptoSlab` / `LockedMmapBacked`
+types: the lock does not defend against hibernation, `fork()` COW, or
+`ptrace`. See the end-to-end usage in
+[`crates/forge-alloc/tests/crypto_slab_e2e.rs`](../crates/forge-alloc/tests/crypto_slab_e2e.rs).
+
 **Example**: [`crates/forge-alloc/examples/auth_service.rs`](../crates/forge-alloc/examples/auth_service.rs)
 
 ---
