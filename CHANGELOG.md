@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.5] - 2026-05-31
+
+`forge-alloc` 0.3.5 (`forge-alloc-core` unchanged at `0.2.3`). An additive
+release completing the "crypto allocator" composition: a RAM-locking backing
+plus a first-class `CryptoSlab` alias that snaps it together with the hardened
+slab and scrub-on-free. No breaking API changes.
+
+### Added — `forge-alloc`
+- **`LockedMmapBacked`**: an `MmapBacked` whose pages are pinned in RAM with
+  `mlock` / `VirtualLock` so secret data never pages to swap. Construction
+  **fails closed** — if the lock cannot be taken (`RLIMIT_MEMLOCK`, missing
+  privilege) `new` returns `Err` rather than silently leaving the region
+  swappable. On Linux it additionally applies `MADV_DONTDUMP` (best-effort) to
+  exclude the pages from core dumps. Unlocks before unmapping on drop. Forwards
+  the full `OsBacked` surface; `release_pages` is a documented no-op (purging a
+  locked region would defeat the lock).
+- **`CryptoSlab<T, M>`** type alias — the recommended composition for
+  cryptographic key material:
+  `ZeroizeOnFree<Slab<T, GuardPage<SplitMetadata<LockedMmapBacked>>, M>>`. It
+  layers the two crypto guarantees (no-swap lock + core-dump exclusion, and
+  non-elidable scrub-on-free) on top of the existing `HardenedSlab` stack (guard
+  pages, split metadata, optional freelist MAC). Documents its threat-model
+  boundary: the lock prevents swap, not hibernation / `fork()` COW / `ptrace`,
+  and only the data region is locked (metadata and the MAC key are not, by
+  design). Proven end-to-end by a new integration test that exercises the lock
+  and verifies a freed secret is scrubbed past the freelink.
+
 ## [0.3.4] - 2026-05-31
 
 `forge-alloc` 0.3.4 and `forge-alloc-core` 0.2.3. A security and correctness
@@ -516,7 +543,9 @@ picked up automatically by `cargo update`.
   `Handle<T, G>`, `SlabOwner<T, B>` / `SlabRemote<T, B>` /
   `RemoteFreeQueue`.
 
-[Unreleased]: https://github.com/dmaesj/forge-alloc/compare/v0.3.3...HEAD
+[Unreleased]: https://github.com/dmaesj/forge-alloc/compare/v0.3.5...HEAD
+[0.3.5]: https://github.com/dmaesj/forge-alloc/compare/v0.3.4...v0.3.5
+[0.3.4]: https://github.com/dmaesj/forge-alloc/compare/v0.3.3...v0.3.4
 [0.3.3]: https://github.com/dmaesj/forge-alloc/compare/v0.3.2...v0.3.3
 [0.3.2]: https://github.com/dmaesj/forge-alloc/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/dmaesj/forge-alloc/compare/v0.3.0...v0.3.1
