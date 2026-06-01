@@ -594,7 +594,15 @@ mod tests {
         // Restore the original limit before asserting (so a panic here
         // doesn't leave the process with a broken limit).
         // SAFETY: restoring the previously-read limit.
-        unsafe { libc::setrlimit(libc::RLIMIT_MEMLOCK, &original) };
+        let restore_rc = unsafe { libc::setrlimit(libc::RLIMIT_MEMLOCK, &original) };
+        // Restoring a limit we just lowered should never fail. If it somehow
+        // did, the rest of this test process would run with RLIMIT_MEMLOCK=0
+        // and every other mlock test would fail confusingly — surface it loudly
+        // rather than letting it cascade silently.
+        assert_eq!(
+            restore_rc, 0,
+            "failed to restore RLIMIT_MEMLOCK; remaining mlock tests would spuriously fail",
+        );
 
         assert!(result.is_err(), "mlock must fail when RLIMIT_MEMLOCK=0");
         assert!(
