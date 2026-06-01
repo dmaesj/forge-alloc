@@ -87,8 +87,44 @@ use super::mmap::{mmap_last_os_error, mmap_record_os_error, mmap_set_last_os_err
 
 /// OS-mapped anonymous region whose pages are locked into physical RAM.
 ///
-/// See the [module-level documentation](self) for the security guarantee,
-/// the fail-closed constructor contract, and composition notes.
+/// Combines `mmap`/`VirtualAlloc` (from the inner [`MmapBacked`]) with
+/// `mlock`/`VirtualLock` so the region's pages are **never paged out to
+/// swap** — the primary use case is cryptographic secrets. It does **not**
+/// scrub on free; pair it with [`ZeroizeOnFree`](crate::ZeroizeOnFree) (the
+/// [`CryptoSlab`](crate::CryptoSlab) alias wires both together).
+///
+/// # Fail-closed
+///
+/// If the lock syscall fails (`RLIMIT_MEMLOCK`, missing
+/// `CAP_IPC_LOCK`/`SeLockMemoryPrivilege`, or too small a working-set minimum
+/// on Windows) the constructor returns `Err(AllocError)` and releases the
+/// mapping — it never silently falls back to unlocked memory. Read the OS
+/// error code via [`mmap_last_os_error`](super::mmap::mmap_last_os_error)
+/// immediately after the failure.
+///
+/// # Threat-model boundary
+///
+/// `mlock`/`VirtualLock` guarantees the pages are **not paged to swap**. It
+/// does NOT prevent **hibernation / suspend-to-disk** (the OS writes all of
+/// RAM, locked pages included), **core dumps** (on Linux `MADV_DONTDUMP` is
+/// applied best-effort after the lock; elsewhere set `RLIMIT_CORE = 0` or the
+/// platform equivalent), **`fork()` COW**, or **`ptrace` / `/proc/<pid>/mem`**.
+///
+/// # `release_pages` is a no-op
+///
+/// Purging pages (`MADV_DONTNEED` / `MEM_RESET`) on a locked crypto region
+/// would defeat the lock and could leave secret plaintext in reclaimed pages,
+/// so [`release_pages`](OsBacked::release_pages) is intentionally a documented
+/// no-op here. Use [`MmapBacked`] directly if you need page recycling for
+/// non-secret data.
+///
+/// # Thread safety
+///
+/// `Send`: yes — the lock is keyed on the virtual address range `(ptr, len)`,
+/// not the Rust value's stack address, so moving the struct (including across
+/// threads) is safe; inherited from the `inner: MmapBacked` field. `Sync`: NO
+/// — inherited from `MmapBacked`'s `UnsafeCell` cursor, concurrent `&self`
+/// allocation would race.
 pub struct LockedMmapBacked {
     inner: MmapBacked,
 }
