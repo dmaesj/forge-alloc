@@ -3,9 +3,31 @@
 //!
 //! Combines `mmap`/`VirtualAlloc` (from the inner [`MmapBacked`]) with
 //! `mlock`/`VirtualLock` to ensure the region's pages are **never paged out
-//! to swap or disk**. The primary use case is storing cryptographic secrets:
+//! to swap**. The primary use case is storing cryptographic secrets:
 //! pair with [`ZeroizeOnFree`](crate::ZeroizeOnFree) so secrets are scrubbed
 //! on deallocation *and* never silently written to swap.
+//!
+//! # Threat-model boundary
+//!
+//! `mlock`/`VirtualLock` guarantees these pages are **not paged to swap**.
+//! It does NOT prevent:
+//!
+//! - **Hibernation / suspend-to-disk** — the OS writes all physical RAM,
+//!   including locked pages, to the hibernate file. So "never written to disk"
+//!   is too strong; the correct claim is "never paged to *swap*". Hibernation
+//!   can still land the pages on disk.
+//! - **Core dumps** — locked pages appear in a crash core file unless
+//!   explicitly excluded (on Linux, `MADV_DONTDUMP` is applied best-effort
+//!   after a successful `mlock`; on other platforms it is the caller's
+//!   responsibility, e.g. `RLIMIT_CORE=0`).
+//! - **`fork()` COW** — the child inherits the locked mapping AND the secret;
+//!   both processes hold the data after `fork`.
+//! - **`ptrace` / `/proc/<pid>/mem`** — a debugger with sufficient permission
+//!   can read the pages directly regardless of the lock.
+//!
+//! Additionally, `LockedMmapBacked` does **NOT scrub memory on free**. Pair it
+//! with [`ZeroizeOnFree`](crate::ZeroizeOnFree) to erase secrets at
+//! deallocation time.
 //!
 //! ## Design: composition over re-implementation
 //!
@@ -61,7 +83,7 @@ use forge_alloc_core::{
     AllocError, Allocator, Deallocator, FixedRange, NonZeroLayout, OsBacked, ProtectFlags,
 };
 
-use super::mmap::{mmap_record_os_error, MmapBacked};
+use super::mmap::{mmap_last_os_error, mmap_record_os_error, mmap_set_last_os_error, MmapBacked};
 
 /// OS-mapped anonymous region whose pages are locked into physical RAM.
 ///
@@ -99,11 +121,19 @@ impl LockedMmapBacked {
         // (which calls munmap/VirtualFree) before returning Err.
         let ok = unsafe { os_lock(inner.base(), inner.size()) };
         if !ok {
-            // Capture the OS error *before* `inner` drops: `inner`'s Drop
-            // calls `munmap`/`VirtualFree`, which is an OS call that can
-            // clobber errno/GetLastError. The error has already been captured
-            // inside `os_lock` immediately after the failing syscall, so
-            // `inner` can drop safely here without loss of the error code.
+            // `os_lock` already captured errno/GetLastError into the module
+            // thread-local. Snapshot it NOW before `inner` drops: the inner's
+            // Drop calls `munmap`/`VirtualFree`, which can overwrite the slot
+            // via `capture_os_error` if *that* syscall also fails. Restore the
+            // lock error after the drop so callers see the root cause, not a
+            // spurious munmap error.
+            let saved = mmap_last_os_error()
+                .as_ref()
+                .and_then(std::io::Error::raw_os_error);
+            drop(inner);
+            if let Some(code) = saved {
+                mmap_set_last_os_error(code);
+            }
             return Err(AllocError);
         }
         Ok(Self { inner })
@@ -187,6 +217,9 @@ unsafe impl OsBacked for LockedMmapBacked {
         // Deliberately empty. See module-level docs.
     }
 
+    /// Note: `mprotect`/`VirtualProtect` changes do NOT release the
+    /// `mlock`/`VirtualLock` — the pages stay pinned into RAM regardless of
+    /// the new protection bits.
     #[inline]
     unsafe fn protect(&self, ptr: NonNull<u8>, size: usize, flags: ProtectFlags) {
         // SAFETY: forwarded; caller has promised [ptr, ptr+size) lies inside
@@ -215,6 +248,11 @@ unsafe impl OsBacked for LockedMmapBacked {
 /// `size` bytes. `size` must be page-aligned (guaranteed by `MmapBacked::new`).
 #[cfg(unix)]
 unsafe fn os_lock(base: NonNull<u8>, size: usize) -> bool {
+    debug_assert_eq!(
+        size % crate::backing::mmap::page_size(),
+        0,
+        "os_lock: size must be page-aligned",
+    );
     // SAFETY: base/size come from an alive MmapBacked — page-aligned,
     // committed, within address space. mlock(2) is safe on any valid
     // anonymous mapping.
@@ -223,6 +261,18 @@ unsafe fn os_lock(base: NonNull<u8>, size: usize) -> bool {
         // Capture errno immediately, before any other call clobbers it.
         mmap_record_os_error();
         return false;
+    }
+    // Linux only: ask the kernel to exclude these secret pages from core dumps.
+    // BEST-EFFORT: if madvise(MADV_DONTDUMP) fails, ignore the failure — the
+    // mlock is the hard security guarantee; DONTDUMP is defence-in-depth only.
+    // Not called on non-Linux Unix (no portable equivalent).
+    #[cfg(target_os = "linux")]
+    unsafe {
+        libc::madvise(
+            base.as_ptr() as *mut libc::c_void,
+            size,
+            libc::MADV_DONTDUMP,
+        );
     }
     true
 }
@@ -237,6 +287,11 @@ unsafe fn os_lock(base: NonNull<u8>, size: usize) -> bool {
 /// `base`/`size` must describe a range previously locked with `os_lock`.
 #[cfg(unix)]
 unsafe fn os_unlock(base: NonNull<u8>, size: usize) {
+    debug_assert_eq!(
+        size % crate::backing::mmap::page_size(),
+        0,
+        "os_unlock: size must be page-aligned",
+    );
     // SAFETY: base/size describe a range we locked in the constructor.
     // munlock on a locked mapping is safe; errors are informational only.
     let rc = unsafe { libc::munlock(base.as_ptr() as *const libc::c_void, size) };
@@ -260,6 +315,11 @@ unsafe fn os_unlock(base: NonNull<u8>, size: usize) {
 /// of at least `size` bytes.
 #[cfg(windows)]
 unsafe fn os_lock(base: NonNull<u8>, size: usize) -> bool {
+    debug_assert_eq!(
+        size % crate::backing::mmap::page_size(),
+        0,
+        "os_lock: size must be page-aligned",
+    );
     use windows_sys::Win32::System::Memory::VirtualLock;
     // SAFETY: VirtualLock on a committed, valid VirtualAlloc region.
     // Returns nonzero on success, 0 on failure (GetLastError for details).
@@ -281,6 +341,11 @@ unsafe fn os_lock(base: NonNull<u8>, size: usize) -> bool {
 /// `base`/`size` must describe a range previously locked with `os_lock`.
 #[cfg(windows)]
 unsafe fn os_unlock(base: NonNull<u8>, size: usize) {
+    debug_assert_eq!(
+        size % crate::backing::mmap::page_size(),
+        0,
+        "os_unlock: size must be page-aligned",
+    );
     use windows_sys::Win32::System::Memory::VirtualUnlock;
     // SAFETY: VirtualUnlock on a range previously locked with VirtualLock.
     // Returns nonzero on success, 0 on failure. Drop can't propagate Err.
@@ -303,11 +368,25 @@ mod tests {
     // paths. Miri cannot model these syscalls, so all tests in this module
     // are gated off under miri.
 
+    // Serializes all tests that construct a `LockedMmapBacked`. Without this,
+    // the `unix_fail_closed_via_setrlimit` test — which sets a process-global
+    // `RLIMIT_MEMLOCK=0` — can race with any concurrent success-path test and
+    // cause it to spuriously fail. Rust runs tests multi-threaded in a single
+    // process; taking this lock in *every* mlock-exercising test ensures the
+    // setrlimit window is isolated.
+    //
+    // Note: `VirtualLock`-failure on Windows has no deterministic test
+    // because forcing it to fail requires working-set manipulation.  The Unix
+    // `unix_fail_closed_via_setrlimit` test covers the lock-failure branch on
+    // Unix.
+    static MLOCK_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     /// The trait surface is correct: base/size are populated, base is
     /// page-aligned, size is >= the requested amount.
     #[test]
     #[cfg_attr(miri, ignore = "miri-incompatible: mmap / mlock")]
     fn trait_surface_single_page() {
+        let _guard = MLOCK_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let size = page_size();
         // Construction may legitimately fail in sandboxed environments where
         // mlock is not permitted (RLIMIT_MEMLOCK=0, container policy, etc.).
@@ -347,6 +426,7 @@ mod tests {
     #[test]
     #[cfg_attr(miri, ignore = "miri-incompatible: mmap / mlock")]
     fn bump_allocate_returns_usable_memory() {
+        let _guard = MLOCK_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let size = 4 * page_size();
         mmap_clear_last_os_error();
         let m = match LockedMmapBacked::new(size) {
@@ -371,6 +451,7 @@ mod tests {
     #[test]
     #[cfg_attr(miri, ignore = "miri-incompatible: mmap / mlock")]
     fn fixed_range_contains_allocated_pointer() {
+        let _guard = MLOCK_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let m = match LockedMmapBacked::new(page_size()) {
             Ok(m) => m,
             Err(_) => return,
@@ -384,6 +465,7 @@ mod tests {
     #[test]
     #[cfg_attr(miri, ignore = "miri-incompatible: mmap / mlock")]
     fn drop_does_not_crash() {
+        let _guard = MLOCK_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let m = match LockedMmapBacked::new(page_size()) {
             Ok(m) => m,
             Err(_) => return,
@@ -397,6 +479,7 @@ mod tests {
     #[test]
     #[cfg_attr(miri, ignore = "miri-incompatible: mmap / mlock")]
     fn base_is_stable_after_move() {
+        let _guard = MLOCK_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let m = match LockedMmapBacked::new(page_size()) {
             Ok(m) => m,
             Err(_) => return,
@@ -416,6 +499,7 @@ mod tests {
     #[test]
     #[cfg_attr(miri, ignore = "miri-incompatible: mmap / mlock")]
     fn release_pages_is_noop() {
+        let _guard = MLOCK_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let m = match LockedMmapBacked::new(page_size()) {
             Ok(m) => m,
             Err(_) => return,
@@ -433,17 +517,21 @@ mod tests {
         }
     }
 
-    /// Fail-closed: if the lock cannot be acquired, the OS error is captured
-    /// and no memory is leaked (the test can only *observe* that Err is
-    /// returned and an error is captured; leak-checking requires an external
-    /// tool such as Valgrind or ASAN).
+    /// Fail-closed: if the mapping itself cannot be allocated, the OS error is
+    /// captured and `Err` is returned. This exercises the *mmap-allocation*
+    /// failure path (not the lock-failure path) by requesting an impossibly
+    /// large region; the same `Err + captured-error` contract applies to both
+    /// failure points.
     ///
-    /// This test exercises the error-capture path by requesting an
-    /// impossibly large mapping (which will fail at the mmap step rather than
-    /// the mlock step, but the same `Err + captured-error` contract holds).
+    /// (The lock-failure branch on Unix is covered by
+    /// `unix_fail_closed_via_setrlimit`. The `VirtualLock`-failure branch on
+    /// Windows has no deterministic test; see the `MLOCK_TEST_LOCK` comment.)
     #[test]
     #[cfg_attr(miri, ignore = "miri-incompatible: mmap / mlock")]
-    fn fail_closed_captures_os_error() {
+    fn fail_closed_on_mapping_failure_captures_error() {
+        // No MLOCK_TEST_LOCK needed here: the huge request fails at mmap time
+        // before any mlock/VirtualLock is attempted, so it cannot interact
+        // with the setrlimit test's RLIMIT_MEMLOCK window.
         mmap_clear_last_os_error();
         // A near-usize::MAX request will fail at mmap time on every platform.
         let huge = usize::MAX / 2;
@@ -457,15 +545,13 @@ mod tests {
 
     /// On Unix only: setrlimit-based fail-closed test.
     ///
-    /// Reduces `RLIMIT_MEMLOCK` to a tiny value, attempts to lock more than
-    /// the limit, and asserts that `Err` is returned with a captured errno.
+    /// Reduces `RLIMIT_MEMLOCK` to 0, attempts to lock one page, and asserts
+    /// that `Err` is returned with a captured errno.
     ///
-    /// CAUTION: `setrlimit` is process-global and Rust runs tests in a shared
-    /// process. To limit the race window we save and restore the original
-    /// limit around the test. However, concurrent tests that also attempt
-    /// `mlock` could interfere if they run in parallel on the same thread.
-    /// If this test proves flaky in your environment, set
-    /// `FORGE_ALLOC_SKIP_SETRLIMIT_TEST=1` to skip it.
+    /// Takes `MLOCK_TEST_LOCK` to prevent any concurrent success-path test
+    /// from racing the process-global limit change. The original limit is
+    /// saved and restored around the test; the env-var
+    /// `FORGE_ALLOC_SKIP_SETRLIMIT_TEST=1` skips it entirely.
     #[cfg(unix)]
     #[test]
     #[cfg_attr(miri, ignore = "miri-incompatible: mmap / mlock")]
@@ -473,6 +559,8 @@ mod tests {
         if std::env::var_os("FORGE_ALLOC_SKIP_SETRLIMIT_TEST").is_some() {
             return;
         }
+
+        let _guard = MLOCK_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 
         // Save current RLIMIT_MEMLOCK.
         let mut original = libc::rlimit {

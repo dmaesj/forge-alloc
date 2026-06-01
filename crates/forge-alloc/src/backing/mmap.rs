@@ -124,6 +124,18 @@ pub(super) fn capture_synthetic_einval() {
     LAST_OS_ERROR.with(|c| c.set(Some(code)));
 }
 
+/// Write a raw OS error code into the per-thread last-error slot. Used by
+/// composing crates that need to preserve a previously captured error across
+/// a Drop (e.g. `LockedMmapBacked` saving the lock errno before the inner
+/// `MmapBacked` drops and potentially overwrites it with a munmap error).
+///
+/// Mirrors [`capture_synthetic_einval`]: both write directly to `LAST_OS_ERROR`
+/// with a caller-supplied `i32` value.
+#[inline]
+pub(crate) fn mmap_set_last_os_error(code: i32) {
+    LAST_OS_ERROR.with(|c| c.set(Some(code)));
+}
+
 /// Optional flags for [`MmapBacked::with_flags`].
 ///
 /// Most flags route to features not yet implemented (`HugePageAligned`,
