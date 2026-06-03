@@ -25,7 +25,9 @@ use core::cell::UnsafeCell;
 use core::marker::PhantomData;
 use core::ptr::NonNull;
 
-use forge_alloc_core::{AllocError, Allocator, Deallocator, FixedRange, NonZeroLayout};
+use forge_alloc_core::{
+    AllocError, Allocator, Deallocator, FixedRange, NonZeroLayout, OsBacked, ProtectFlags,
+};
 
 /// Bump arena over any [`FixedRange`] backing.
 ///
@@ -232,6 +234,50 @@ impl<B: FixedRange> FixedRange for BumpArena<B> {
     }
 }
 
+// When the backing is OS-managed, the arena is too: it occupies the backing's
+// entire mapping, so `base_ptr` / `region_size` / `release_pages` / `protect`
+// forward straight through. The motivating use case is an arena *pool* on a
+// per-commit / per-branch workload: instead of dropping (and `munmap`-ing) an
+// arena on pool overflow, the pool can `reset()` it and `release_pages()` the
+// whole region — returning the physical pages to the OS (`madvise(DONTNEED)` /
+// `MEM_RESET`) while keeping the virtual reservation warm for reuse. That
+// removes both the `munmap` syscall and the demand-zero re-fault storm a fresh
+// `mmap` would incur on the next commit, without changing pool semantics.
+//
+// SAFETY: `base_ptr` (stable, non-null) and `region_size` (accurate page-rounded
+// length) are discharged by the `B: OsBacked` backing; the arena caches nothing
+// and delegates every call to it. For `release_pages` / `protect`, the in-region,
+// page-alignment, and no-live-overlap requirements are the caller's documented
+// `unsafe` precondition (see each method's `# Safety`); like the crate's other
+// OsBacked wrappers, neither the arena nor the backing re-validates them.
+unsafe impl<B: FixedRange + OsBacked> OsBacked for BumpArena<B> {
+    #[inline]
+    fn base_ptr(&self) -> NonNull<u8> {
+        self.backing.base_ptr()
+    }
+
+    #[inline]
+    fn region_size(&self) -> usize {
+        self.backing.region_size()
+    }
+
+    #[inline]
+    unsafe fn release_pages(&self, ptr: NonNull<u8>, size: usize) {
+        // SAFETY: forwarded; caller guarantees an in-region range with no live
+        // allocations (after `reset()` the arena has none — the pool-overflow
+        // path above). The backing clamps the reset to the committed prefix on
+        // Windows, so a full-region release of a partially-committed lazy mapping
+        // resets only the committed pages.
+        unsafe { self.backing.release_pages(ptr, size) }
+    }
+
+    #[inline]
+    unsafe fn protect(&self, ptr: NonNull<u8>, size: usize, flags: ProtectFlags) {
+        // SAFETY: forwarded; caller guarantees an in-region, page-aligned range.
+        unsafe { self.backing.protect(ptr, size, flags) }
+    }
+}
+
 // Send when B: Send. The `NonNull<u8>` fields are `!Send` by default but the
 // memory they point to is owned by `backing`, which we move along with the
 // arena. `UnsafeCell<usize>` is `Send` (cursor is just an integer).
@@ -429,6 +475,45 @@ mod tests {
         let _ = arena.allocate(l1).unwrap();
         let _ = arena.allocate(l1).unwrap();
         assert_eq!(arena.allocated(), 2);
+    }
+
+    // The `OsBacked` forward exists only for OS-managed backings, so this test
+    // needs `MmapBacked` (std + unix/windows). It proves the surface forwards to
+    // the backing and that the pool-overflow path — reset, release the whole
+    // region's pages, reuse — round-trips without `munmap`.
+    #[cfg(all(feature = "std", any(unix, windows)))]
+    #[test]
+    #[cfg_attr(miri, ignore = "miri can't shim mmap / VirtualAlloc")]
+    fn osbacked_forwards_and_release_after_reset_round_trips() {
+        use crate::backing::{page_size, MmapBacked};
+        use forge_alloc_core::OsBacked;
+
+        let mut arena = BumpArena::new(MmapBacked::new(64 * 1024).unwrap()).unwrap();
+
+        // Cross-interface consistency: the OsBacked surface must agree with the
+        // independent FixedRange surface and the known reservation size — not a
+        // self-referential `arena.x() == arena.backing().x()` tautology (which
+        // would pass even if the forward were broken).
+        assert_eq!(arena.region_size(), 64 * 1024);
+        assert_eq!(arena.region_size(), arena.capacity()); // OsBacked vs cached FixedRange size
+        assert_eq!(arena.base_ptr(), arena.base()); // OsBacked vs FixedRange base
+
+        let layout = NonZeroLayout::from_size_align(page_size(), 8).unwrap();
+        let block = arena.allocate(layout).unwrap();
+        // SAFETY: freshly allocated page-sized block.
+        unsafe { core::ptr::write_bytes(block.cast::<u8>().as_ptr(), 0xEE, page_size()) };
+
+        // Pool-overflow path: no live allocations after reset, so releasing the
+        // full region is sound; the mapping stays reserved for reuse.
+        arena.reset();
+        let (base, size) = (arena.base_ptr(), arena.region_size());
+        // SAFETY: full region, no live allocations after reset.
+        unsafe { arena.release_pages(base, size) };
+
+        // The still-mapped arena reuses cleanly — write must not fault.
+        let block2 = arena.allocate(layout).unwrap();
+        // SAFETY: freshly allocated page-sized block.
+        unsafe { core::ptr::write_bytes(block2.cast::<u8>().as_ptr(), 0x11, page_size()) };
     }
 }
 

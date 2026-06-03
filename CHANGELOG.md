@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — `forge-alloc`
+- **`BumpArena` now implements `OsBacked`** (forwarding `base_ptr` /
+  `region_size` / `release_pages` / `protect` to its backing) when the backing
+  is `OsBacked`. This lets an arena pool reclaim a reset arena's physical pages
+  via `release_pages` (`madvise(DONTNEED)` / `MEM_RESET`) on pool overflow —
+  bounding resident memory without `munmap`/re-`mmap` churn or the demand-zero
+  re-fault storm a fresh mapping would incur — while keeping the virtual
+  reservation warm for reuse.
+
 ## [0.3.5] - 2026-05-31
 
 `forge-alloc` 0.3.5 (`forge-alloc-core` unchanged at `0.2.3`). An additive
