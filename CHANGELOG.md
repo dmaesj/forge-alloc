@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.6] - 2026-06-02
+
+`forge-alloc` 0.3.6 (`forge-alloc-core` unchanged at `0.2.3`). A small additive
+release exposing `release_pages` through `BumpArena`. No breaking API changes.
+
 ### Added — `forge-alloc`
 - **`BumpArena` now implements `OsBacked`** (forwarding `base_ptr` /
   `region_size` / `release_pages` / `protect` to its backing) when the backing
@@ -552,7 +557,8 @@ picked up automatically by `cargo update`.
   `Handle<T, G>`, `SlabOwner<T, B>` / `SlabRemote<T, B>` /
   `RemoteFreeQueue`.
 
-[Unreleased]: https://github.com/dmaesj/forge-alloc/compare/v0.3.5...HEAD
+[Unreleased]: https://github.com/dmaesj/forge-alloc/compare/v0.3.6...HEAD
+[0.3.6]: https://github.com/dmaesj/forge-alloc/compare/v0.3.5...v0.3.6
 [0.3.5]: https://github.com/dmaesj/forge-alloc/compare/v0.3.4...v0.3.5
 [0.3.4]: https://github.com/dmaesj/forge-alloc/compare/v0.3.3...v0.3.4
 [0.3.3]: https://github.com/dmaesj/forge-alloc/compare/v0.3.2...v0.3.3
