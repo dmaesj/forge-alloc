@@ -1,6 +1,6 @@
 [package]
 name        = "forge-alloc"
-version     = "0.3.6"
+version     = "0.3.7"
 description = "Composable memory allocator primitives — pay-for-what-you-use security hardening with zero-cost type-level composition"
 edition.workspace      = true
 rust-version.workspace = true

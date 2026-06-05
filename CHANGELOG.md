@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.7] - 2026-06-04
+
+`forge-alloc` 0.3.7 (`forge-alloc-core` unchanged at `0.2.3`). An additive
+release rounding out the `BumpArena` API and adding arena pooling. No breaking
+API changes.
+
+### Added — `forge-alloc`
+- **`ArenaPool<B, F>`** — recycle reset `BumpArena`s across a per-commit /
+  per-branch workload. `checkout` hands one out (reusing a reset idle arena or
+  minting via the factory); `give_back` resets in O(1) and retains it up to a
+  cap, so in steady state the same mappings are reused with **zero**
+  `munmap` / `mmap` / re-fault. `prewarm` pre-mints, `clear` drops all idle, and
+  `release_idle` (when `B: OsBacked`) drops idle arenas' physical pages via
+  `madvise(DONTNEED)` / `MEM_RESET` while keeping the virtual reservation warm —
+  bounding resident memory without leaving the pool. Needs only `alloc`.
+- **Typed `BumpArena` allocation** — `alloc_uninit::<T>()` (compile-time
+  size/align so the bounds + alignment math fold; ZST returns a dangling-aligned
+  pointer), plus `alloc::<T>(value)`, `alloc_slice_copy::<T: Copy>(&[T])`, and
+  `alloc_str(&str)` convenience methods.
+- **`BumpArena::scope()` → `Scope`** — a nestable, panic-safe RAII scratch
+  checkpoint. Allocations through the scope (`alloc_uninit` / `alloc` /
+  `alloc_slice_copy` / `alloc_str`, plus raw `allocate`) borrow the guard, so the
+  borrow checker forbids them from outliving the cursor rewind on `Drop` (which
+  runs on a panic unwind too). Also exposes `rewind_to(mark)`, the underlying
+  checkpoint primitive.
+- **In-place `grow`** — `BumpArena`'s `Allocator::grow` now resizes the
+  most-recent allocation (the one ending at the cursor) by a cursor advance with
+  no copy; other blocks relocate as before. Speeds arena-backed `Vec`/`String`
+  building.
+
 ## [0.3.6] - 2026-06-02
 
 `forge-alloc` 0.3.6 (`forge-alloc-core` unchanged at `0.2.3`). A small additive
@@ -557,7 +587,8 @@ picked up automatically by `cargo update`.
   `Handle<T, G>`, `SlabOwner<T, B>` / `SlabRemote<T, B>` /
   `RemoteFreeQueue`.
 
-[Unreleased]: https://github.com/dmaesj/forge-alloc/compare/v0.3.6...HEAD
+[Unreleased]: https://github.com/dmaesj/forge-alloc/compare/v0.3.7...HEAD
+[0.3.7]: https://github.com/dmaesj/forge-alloc/compare/v0.3.6...v0.3.7
 [0.3.6]: https://github.com/dmaesj/forge-alloc/compare/v0.3.5...v0.3.6
 [0.3.5]: https://github.com/dmaesj/forge-alloc/compare/v0.3.4...v0.3.5
 [0.3.4]: https://github.com/dmaesj/forge-alloc/compare/v0.3.3...v0.3.4
