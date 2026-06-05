@@ -28,6 +28,7 @@
 //!   allocator with ownership-return remote frees; configurable batch
 //!   drain via [`BatchPolicy`] (Fixed / Adaptive).
 
+mod arena_pool;
 mod bump;
 mod fallback;
 mod generational;
@@ -35,6 +36,7 @@ mod size_classed;
 mod slab;
 mod stack_alloc;
 
+pub use arena_pool::ArenaPool;
 pub use bump::{BumpArena, BumpDeallocator, Scope};
 pub use fallback::WithFallback;
 pub use generational::{GenerationInt, GenerationalSlab, Handle};

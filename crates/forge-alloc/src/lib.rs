@@ -78,8 +78,8 @@ pub use backing::{
 
 #[doc(inline)]
 pub use layout::{
-    BumpArena, BumpDeallocator, GenerationInt, GenerationalSlab, Handle, Scope, SizeClassed, Slab,
-    StackAlloc, WithFallback, DEFAULT_CLASS_SIZES_8,
+    ArenaPool, BumpArena, BumpDeallocator, GenerationInt, GenerationalSlab, Handle, Scope,
+    SizeClassed, Slab, StackAlloc, WithFallback, DEFAULT_CLASS_SIZES_8,
 };
 
 #[cfg(target_has_atomic = "ptr")]
