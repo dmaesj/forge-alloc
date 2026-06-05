@@ -104,6 +104,49 @@ fn alloc_uninit_and_scope_round_trip() {
     unsafe { q.as_ptr().write(1) };
 }
 
+/// Exercises the typed convenience copies and in-place `grow` under miri:
+/// `alloc`/`alloc_slice_copy`/`alloc_str` provenance and the `*mut [u8] ->
+/// *mut str` cast, plus the grow fast path (cursor advance, same pointer) and
+/// the relocate path (`copy_nonoverlapping`).
+#[test]
+fn typed_copies_and_grow_under_miri() {
+    use forge_alloc::Allocator;
+    let arena: BumpArena<InlineBacked<1024>> = BumpArena::new(InlineBacked::<1024>::new()).unwrap();
+
+    let v = arena.alloc(42u64).unwrap();
+    assert_eq!(unsafe { v.as_ptr().read() }, 42);
+    let s = arena.alloc_slice_copy(&[1u32, 2, 3]).unwrap();
+    assert_eq!(unsafe { s.as_ref() }, &[1, 2, 3]);
+    let st = arena.alloc_str("miri").unwrap();
+    assert_eq!(unsafe { st.as_ref() }, "miri");
+
+    // Empty + ZST-element dangling slices: miri must accept the
+    // `slice_from_raw_parts(dangling, n)` construction (no byte access).
+    let empty = arena.alloc_slice_copy::<u32>(&[]).unwrap();
+    assert_eq!(unsafe { empty.as_ref() }, &[] as &[u32]);
+    let zsts = arena.alloc_slice_copy(&[(), (), ()]).unwrap();
+    assert_eq!(unsafe { zsts.as_ref().len() }, 3);
+    let empty_str = arena.alloc_str("").unwrap();
+    assert_eq!(unsafe { empty_str.as_ref() }, "");
+
+    // In-place grow: `block` is the most-recent allocation.
+    let l8 = NonZeroLayout::from_size_align(8, 8).unwrap();
+    let l24 = NonZeroLayout::from_size_align(24, 8).unwrap();
+    let block = arena.allocate(l8).unwrap().cast::<u8>();
+    unsafe { core::ptr::write_bytes(block.as_ptr(), 0xEE, 8) };
+    let grown = unsafe { arena.grow(block, l8, l24).unwrap() };
+    assert_eq!(grown.cast::<u8>(), block); // same pointer, no copy
+    unsafe { core::ptr::write_bytes(grown.cast::<u8>().as_ptr(), 0x11, 24) };
+
+    // Relocate grow: allocate past `block2` so it is no longer last.
+    let block2 = arena.allocate(l8).unwrap().cast::<u8>();
+    unsafe { core::ptr::write_bytes(block2.as_ptr(), 0xCD, 8) };
+    let _other = arena.allocate(l8).unwrap();
+    let moved = unsafe { arena.grow(block2, l8, l24).unwrap() };
+    assert_ne!(moved.cast::<u8>(), block2);
+    assert_eq!(unsafe { moved.cast::<u8>().as_ptr().read() }, 0xCD);
+}
+
 /// `SharedBumpArena<InlineBacked<2048>>` — CAS-based bump.
 /// Single-threaded under miri (miri can spawn threads but the test
 /// stays deterministic to avoid stress on miri's borrow tracker).

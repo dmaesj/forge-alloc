@@ -220,6 +220,49 @@ impl<B: FixedRange> BumpArena<B> {
         }
     }
 
+    /// Allocate space for one `T` and move `value` into it, returning a pointer
+    /// to the initialized `T`. The typed-and-initialized companion of
+    /// [`alloc_uninit`](Self::alloc_uninit).
+    #[inline]
+    pub fn alloc<T>(&self, value: T) -> Result<NonNull<T>, AllocError> {
+        let p = self.alloc_uninit::<T>()?;
+        // SAFETY: `p` is fresh, aligned, exclusive storage for one `T`.
+        unsafe { p.as_ptr().write(value) };
+        Ok(p)
+    }
+
+    /// Copy a slice into the arena, returning a pointer to the copy. `T: Copy`
+    /// so no destructor obligations are transferred. An empty or zero-sized-`T`
+    /// slice consumes no space and yields a dangling-but-aligned slice pointer
+    /// of the same length.
+    #[inline]
+    pub fn alloc_slice_copy<T: Copy>(&self, src: &[T]) -> Result<NonNull<[T]>, AllocError> {
+        let n = src.len();
+        if n == 0 || core::mem::size_of::<T>() == 0 {
+            // A slice of `n` ZSTs (or zero elements) needs no storage; a
+            // dangling, aligned pointer with length `n` is a valid `&[T]`/`&mut`.
+            return Ok(NonNull::slice_from_raw_parts(NonNull::<T>::dangling(), n));
+        }
+        // `array` cannot overflow here: `src` already exists in memory, so
+        // `n * size_of::<T>()` fits `isize`.
+        let layout = NonZeroLayout::array::<T>(n).ok_or(AllocError)?;
+        let dst = self.allocate(layout)?.cast::<T>();
+        // SAFETY: `dst` is fresh storage for `n` `T`s, disjoint from `src`;
+        // `T: Copy` so a bytewise copy is a valid clone.
+        unsafe { core::ptr::copy_nonoverlapping(src.as_ptr(), dst.as_ptr(), n) };
+        Ok(NonNull::slice_from_raw_parts(dst, n))
+    }
+
+    /// Copy a string slice into the arena, returning a pointer to the copy.
+    #[inline]
+    pub fn alloc_str(&self, s: &str) -> Result<NonNull<str>, AllocError> {
+        let bytes = self.alloc_slice_copy(s.as_bytes())?;
+        // SAFETY: the bytes were copied verbatim from a valid `&str`, so they
+        // remain valid UTF-8; `*mut [u8]` and `*mut str` share layout.
+        let p = bytes.as_ptr() as *mut str;
+        Ok(unsafe { NonNull::new_unchecked(p) })
+    }
+
     /// Open a scratch [`Scope`]. Allocations made through the returned guard are
     /// reclaimed when it is dropped, rewinding the cursor to where it was — a
     /// **nestable, panic-safe** checkpoint.
@@ -323,6 +366,62 @@ unsafe impl<B: FixedRange> Allocator for BumpArena<B> {
     #[inline]
     fn capacity_bytes(&self) -> Option<usize> {
         Some(self.capacity())
+    }
+
+    /// In-place grow when `ptr` is the most-recent allocation.
+    ///
+    /// If the block being grown ends exactly at the cursor (i.e. it was the last
+    /// thing allocated), the grow is just a cursor advance — **no copy**, the
+    /// same pointer is returned covering the larger size. This is the common
+    /// case for building a `Vec`/`String` in an arena. Otherwise it falls back
+    /// to allocate-new + copy (the old block is reclaimed at the next `reset`,
+    /// as for any bump allocation).
+    ///
+    /// # Safety
+    ///
+    /// Same as [`Allocator::grow`]: `ptr` is a live allocation of `old` from
+    /// this arena, `new.size() >= old.size()`, and `old.align() == new.align()`.
+    unsafe fn grow(
+        &self,
+        ptr: NonNull<u8>,
+        old: NonZeroLayout,
+        new: NonZeroLayout,
+    ) -> Result<NonNull<[u8]>, AllocError> {
+        debug_assert!(new.size() >= old.size());
+        debug_assert_eq!(old.align(), new.align());
+        let base = self.backing.base();
+        let base_addr = base.as_ptr() as usize;
+        let off = (ptr.as_ptr() as usize).wrapping_sub(base_addr);
+        // SAFETY: !Sync — exclusive cursor access (same contract as `allocate`).
+        unsafe {
+            let cursor_ptr = self.cursor.get();
+            let cur = *cursor_ptr;
+            // Fast path: `ptr`'s block ends exactly at the cursor → it is the
+            // most-recent allocation, so grow by advancing the cursor in place.
+            if off.checked_add(old.size().get()) == Some(cur) {
+                let new_end = off.checked_add(new.size().get()).ok_or(AllocError)?;
+                if new_end <= self.capacity() {
+                    // Commit the (possibly-)newly-crossed tail pages before
+                    // publishing the cursor; idempotent over the old prefix.
+                    self.backing.commit(off, new.size().get())?;
+                    *cursor_ptr = new_end;
+                    return Ok(NonNull::slice_from_raw_parts(ptr, new.size().get()));
+                }
+                // Doesn't fit in place — fall through to relocate.
+            }
+        }
+        // Fallback: fresh allocation + copy (old block leaked until `reset`).
+        let dst = self.allocate(new)?;
+        // SAFETY: caller's contract gives a valid `ptr` of `old.size()` bytes;
+        // `dst` is fresh, ≥ `old.size()`, and disjoint.
+        unsafe {
+            core::ptr::copy_nonoverlapping(
+                ptr.as_ptr(),
+                dst.cast::<u8>().as_ptr(),
+                old.size().get(),
+            );
+        }
+        Ok(dst)
     }
 
     /// Reset the arena via the Allocator trait.
@@ -463,6 +562,34 @@ impl<'a, B: FixedRange> Scope<'a, B> {
         // SAFETY: fresh, non-aliasing bytes from the arena, bound to `&self`
         // (this scope) so they cannot outlive the rewind. See `alloc_uninit`.
         Ok(unsafe { &mut *block.as_ptr() })
+    }
+
+    /// Allocate and initialize one `T` as scratch, bound to this scope — see
+    /// [`BumpArena::alloc`]. The returned `&mut T` cannot outlive the rewind.
+    #[inline]
+    pub fn alloc<T>(&self, value: T) -> Result<&mut T, AllocError> {
+        Ok(self.alloc_uninit::<T>()?.write(value))
+    }
+
+    /// Copy a slice into the scope, bound to it — see
+    /// [`BumpArena::alloc_slice_copy`]. The returned `&mut [T]` cannot outlive
+    /// the rewind.
+    #[inline]
+    #[allow(clippy::mut_from_ref)]
+    pub fn alloc_slice_copy<T: Copy>(&self, src: &[T]) -> Result<&mut [T], AllocError> {
+        let p = self.arena.alloc_slice_copy(src)?;
+        // SAFETY: fresh, non-aliasing storage bound to `&self`. See `alloc_uninit`.
+        Ok(unsafe { &mut *p.as_ptr() })
+    }
+
+    /// Copy a string into the scope, bound to it — see [`BumpArena::alloc_str`].
+    /// The returned `&mut str` cannot outlive the rewind.
+    #[inline]
+    #[allow(clippy::mut_from_ref)]
+    pub fn alloc_str(&self, s: &str) -> Result<&mut str, AllocError> {
+        let p = self.arena.alloc_str(s)?;
+        // SAFETY: fresh, non-aliasing UTF-8 storage bound to `&self`.
+        Ok(unsafe { &mut *p.as_ptr() })
     }
 
     /// Bytes currently allocated from the underlying arena (the absolute cursor,
@@ -728,6 +855,104 @@ mod tests {
             arena.alloc_uninit::<u64>().is_err(),
             "u64 must not fit once alignment padding pushes its end past capacity"
         );
+    }
+
+    #[test]
+    fn alloc_writes_value_and_slice_and_str_copy() {
+        let arena = BumpArena::new(InlineBacked::<256>::new()).unwrap();
+        let v = arena.alloc(0x1122_3344u32).unwrap();
+        assert_eq!(unsafe { v.as_ptr().read() }, 0x1122_3344);
+
+        let s = arena.alloc_slice_copy(&[1u16, 2, 3, 4]).unwrap();
+        let sl = unsafe { s.as_ref() };
+        assert_eq!(sl, &[1, 2, 3, 4]);
+
+        let st = arena.alloc_str("forge").unwrap();
+        assert_eq!(unsafe { st.as_ref() }, "forge");
+    }
+
+    #[test]
+    fn alloc_slice_copy_empty_and_zst() {
+        let arena = BumpArena::new(InlineBacked::<64>::new()).unwrap();
+        let before = arena.allocated();
+        // Empty slice: no space consumed, length 0.
+        let e = arena.alloc_slice_copy::<u32>(&[]).unwrap();
+        assert_eq!(e.len(), 0);
+        // ZST slice of length 3: no space consumed, length preserved.
+        let z = arena.alloc_slice_copy(&[(), (), ()]).unwrap();
+        assert_eq!(z.len(), 3);
+        assert_eq!(
+            arena.allocated(),
+            before,
+            "empty/ZST slices consume no space"
+        );
+    }
+
+    #[test]
+    fn grow_in_place_when_last_allocation_does_not_copy() {
+        let arena = BumpArena::new(InlineBacked::<256>::new()).unwrap();
+        let l8 = NonZeroLayout::from_size_align(8, 8).unwrap();
+        let l32 = NonZeroLayout::from_size_align(32, 8).unwrap();
+        let block = arena.allocate(l8).unwrap();
+        let ptr = block.cast::<u8>();
+        unsafe { core::ptr::write_bytes(ptr.as_ptr(), 0xAB, 8) };
+        let after_first = arena.allocated();
+
+        // It's the most-recent allocation → grow advances the cursor in place,
+        // returns the SAME pointer, copies nothing.
+        let grown = unsafe { arena.grow(ptr, l8, l32).unwrap() };
+        assert_eq!(
+            grown.cast::<u8>(),
+            ptr,
+            "in-place grow keeps the same pointer"
+        );
+        assert_eq!(grown.len(), 32);
+        assert_eq!(
+            arena.allocated(),
+            after_first - 8 + 32,
+            "cursor advanced by the grow delta, no relocation"
+        );
+        // The preserved prefix is intact.
+        assert_eq!(unsafe { ptr.as_ptr().read() }, 0xAB);
+    }
+
+    #[test]
+    fn grow_relocates_when_not_last_allocation() {
+        let arena = BumpArena::new(InlineBacked::<256>::new()).unwrap();
+        let l8 = NonZeroLayout::from_size_align(8, 8).unwrap();
+        let l32 = NonZeroLayout::from_size_align(32, 8).unwrap();
+        let first = arena.allocate(l8).unwrap().cast::<u8>();
+        unsafe { core::ptr::write_bytes(first.as_ptr(), 0xCD, 8) };
+        // A second allocation makes `first` no longer the most-recent.
+        let _second = arena.allocate(l8).unwrap();
+
+        let grown = unsafe { arena.grow(first, l8, l32).unwrap() };
+        assert_ne!(grown.cast::<u8>(), first, "non-last grow must relocate");
+        assert_eq!(grown.len(), 32);
+        // Relocated copy preserves the old bytes.
+        unsafe {
+            for i in 0..8 {
+                assert_eq!(grown.cast::<u8>().as_ptr().add(i).read(), 0xCD);
+            }
+        }
+    }
+
+    #[test]
+    fn scope_alloc_value_slice_str_are_scope_bound() {
+        let mut arena = BumpArena::new(InlineBacked::<256>::new()).unwrap();
+        let before = arena.allocated();
+        {
+            let scope = arena.scope();
+            let v: &mut u64 = scope.alloc(7u64).unwrap();
+            assert_eq!(*v, 7);
+            *v = 9;
+            assert_eq!(*v, 9);
+            let sl: &mut [u8] = scope.alloc_slice_copy(&[10u8, 20, 30]).unwrap();
+            assert_eq!(sl, &[10, 20, 30]);
+            let st: &mut str = scope.alloc_str("hi").unwrap();
+            assert_eq!(&*st, "hi");
+        }
+        assert_eq!(arena.allocated(), before, "scope reclaims the scratch");
     }
 
     #[test]

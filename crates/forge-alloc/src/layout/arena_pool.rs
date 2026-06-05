@@ -33,11 +33,17 @@ use forge_alloc_core::{AllocError, FixedRange, OsBacked};
 
 use super::bump::BumpArena;
 
-/// A pool of recyclable [`BumpArena`]s. See the [module docs](self).
+/// A pool of recyclable [`BumpArena`]s — hand them out with
+/// [`checkout`](Self::checkout), return them with
+/// [`give_back`](Self::give_back) (an O(1) [`reset`](BumpArena::reset) plus
+/// retain up to a cap), so in steady state the same backings are reused with no
+/// `munmap` / `mmap` / re-fault. The motivating use is a per-commit / per-branch
+/// workload where throwing arenas away per unit of work would dominate the cost.
 ///
 /// `B` is the backing type; `F` mints a fresh backing on demand (e.g.
 /// `|| MmapBacked::new(32 * 1024)`). Arenas are wrapped in [`BumpArena`]
-/// internally.
+/// internally. When idle arenas should not hold physical RAM, an [`OsBacked`]
+/// backing additionally enables [`release_idle`](Self::release_idle).
 pub struct ArenaPool<B: FixedRange, F> {
     factory: F,
     /// Reset, ready-to-reuse arenas. Invariant: every arena here has cursor 0
