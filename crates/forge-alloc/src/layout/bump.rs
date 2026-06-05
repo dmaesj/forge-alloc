@@ -149,6 +149,121 @@ impl<B: FixedRange> BumpArena<B> {
         // &mut self gives exclusive access.
         *self.cursor.get_mut() = 0;
     }
+
+    /// Rewind the cursor to a previously-recorded mark (an [`allocated`]
+    /// value), reclaiming everything allocated since. Like [`reset`] but to an
+    /// arbitrary earlier point; the engine behind [`scope`].
+    ///
+    /// [`allocated`]: BumpArena::allocated
+    /// [`reset`]: BumpArena::reset
+    /// [`scope`]: BumpArena::scope
+    ///
+    /// # Safety contract (caller-upheld, mirrors [`reset`])
+    ///
+    /// All pointers issued by this arena *after* `mark` was recorded become
+    /// invalid. The `&mut self` borrow is what makes this enforceable; the
+    /// [`scope`](BumpArena::scope) guard wraps it in a safe RAII API.
+    #[inline]
+    pub fn rewind_to(&mut self, mark: usize) {
+        debug_assert!(
+            mark <= *self.cursor.get_mut(),
+            "rewind_to mark is ahead of cursor"
+        );
+        // &mut self gives exclusive access.
+        *self.cursor.get_mut() = mark;
+    }
+
+    /// Typed bump allocation: reserve aligned, **uninitialized** storage for one
+    /// `T` and return a pointer to it. Because `size_of::<T>()` and
+    /// `align_of::<T>()` are compile-time constants, the alignment-rounding mask
+    /// and the bounds arithmetic fold to a tight branch — the typed analogue of
+    /// [`allocate`](Allocator::allocate) for the common "allocate one value"
+    /// case, without constructing a runtime [`NonZeroLayout`].
+    ///
+    /// For a zero-sized `T` this returns a well-aligned dangling pointer and
+    /// consumes no space (a successful no-op, where `allocate` rejects a
+    /// zero-size layout). The returned pointer is **uninitialized**; write a
+    /// `T` before reading.
+    #[inline]
+    pub fn alloc_uninit<T>(&self) -> Result<NonNull<T>, AllocError> {
+        let size = core::mem::size_of::<T>();
+        let align = core::mem::align_of::<T>();
+        // ZST: a dangling but aligned pointer is valid for a zero-sized read or
+        // write, and consumes no space. Folds away entirely for non-ZST `T`.
+        if size == 0 {
+            return Ok(NonNull::dangling());
+        }
+        // Re-query the live backing base (structure-relative backings move) —
+        // identical to `allocate`.
+        let base = self.backing.base();
+        let base_addr = base.as_ptr() as usize;
+        // SAFETY: !Sync — no concurrent cursor access (same contract as
+        // `allocate`; `reset`/`rewind_to`/`scope` take `&mut self`).
+        unsafe {
+            let cursor_ptr = self.cursor.get();
+            let cur = *cursor_ptr;
+            // `align` is a compile-time power of two, so `align - 1` and the
+            // mask are constants the optimizer folds.
+            let raw = base_addr.checked_add(cur).ok_or(AllocError)?;
+            let aligned = raw.checked_add(align - 1).ok_or(AllocError)? & !(align - 1);
+            let aligned_off = aligned - base_addr;
+            let end_off = aligned_off.checked_add(size).ok_or(AllocError)?;
+            if end_off > self.capacity() {
+                return Err(AllocError);
+            }
+            // Commit freshly-crossed pages on lazy backings before publishing
+            // the cursor (no-op for eager/inline backings) — as in `allocate`.
+            self.backing.commit(aligned_off, size)?;
+            *cursor_ptr = end_off;
+            let p = base.as_ptr().add(aligned_off) as *mut T;
+            Ok(NonNull::new_unchecked(p))
+        }
+    }
+
+    /// Open a scratch [`Scope`]. Allocations made through the returned guard are
+    /// reclaimed when it is dropped, rewinding the cursor to where it was — a
+    /// **nestable, panic-safe** checkpoint.
+    ///
+    /// Soundness rests on ordinary borrow-checking, not an `unsafe` lifetime
+    /// trick:
+    /// - The `&mut self` borrow makes the arena unusable directly for the
+    ///   scope's lifetime, so no *outer* allocation can land in the region the
+    ///   scope will reclaim.
+    /// - Every reference the scope hands out borrows the guard (`&self`), so the
+    ///   borrow checker forbids it from outliving the guard — and the guard's
+    ///   `Drop` is what rewinds. A scope allocation therefore cannot dangle past
+    ///   the rewind.
+    /// - `Drop` runs on a panic unwind too, so a panicking scope body still
+    ///   rewinds (no torn cursor).
+    ///
+    /// ```
+    /// use forge_alloc::{BumpArena, InlineBacked};
+    /// let mut arena = BumpArena::new(InlineBacked::<1024>::new()).unwrap();
+    /// let before = arena.allocated();
+    /// {
+    ///     let scope = arena.scope();
+    ///     let _scratch = scope.alloc_uninit::<[u8; 64]>().unwrap();
+    ///     assert!(scope.arena_allocated() > before);
+    /// } // scope dropped: cursor rewound
+    /// assert_eq!(arena.allocated(), before);
+    /// ```
+    ///
+    /// A scope allocation cannot escape the scope:
+    /// ```compile_fail
+    /// use forge_alloc::{BumpArena, InlineBacked};
+    /// let mut arena = BumpArena::new(InlineBacked::<1024>::new()).unwrap();
+    /// let escaped;
+    /// {
+    ///     let scope = arena.scope();
+    ///     escaped = scope.alloc_uninit::<u32>().unwrap(); // borrows `scope`
+    /// } // `scope` dropped here
+    /// let _use = escaped; // ERROR: `scope` does not live long enough
+    /// ```
+    #[inline]
+    pub fn scope(&mut self) -> Scope<'_, B> {
+        let mark = self.allocated();
+        Scope { arena: self, mark }
+    }
 }
 
 unsafe impl<B: FixedRange> Deallocator for BumpArena<B> {
@@ -286,6 +401,97 @@ unsafe impl<B: FixedRange + OsBacked> OsBacked for BumpArena<B> {
 // concurrent `&self` allocate would race on the cursor — use
 // `SharedBumpArena` for the cross-thread case.
 unsafe impl<B: FixedRange + Send> Send for BumpArena<B> {}
+
+// ============================================================================
+// Scope — RAII scratch checkpoint
+// ============================================================================
+
+/// A scratch scope over a [`BumpArena`], created by [`BumpArena::scope`].
+///
+/// Allocate through it; when it drops (normally **or on a panic unwind**) the
+/// arena's cursor rewinds to where the scope began, reclaiming everything the
+/// scope allocated. References handed out by the scope borrow it (`&self`), so
+/// the borrow checker forbids them from outliving the rewind — no `unsafe`
+/// lifetime branding is needed, and a misuse is a compile error (see the
+/// `compile_fail` example on [`BumpArena::scope`]).
+///
+/// Scopes nest: call [`scope`](Scope::scope) on a `Scope` to checkpoint again.
+///
+/// While the scope is alive the underlying arena is mutably borrowed, so it
+/// cannot be used directly — which is exactly what prevents an outer allocation
+/// from landing in the region the scope will reclaim.
+pub struct Scope<'a, B: FixedRange> {
+    arena: &'a mut BumpArena<B>,
+    /// Cursor offset at scope creation; the rewind target on drop.
+    mark: usize,
+}
+
+impl<'a, B: FixedRange> Scope<'a, B> {
+    /// Typed scratch allocation bound to this scope — see
+    /// [`BumpArena::alloc_uninit`]. The returned reference borrows the scope, so
+    /// it cannot outlive the rewind. Returns `&mut MaybeUninit<T>`; write a `T`
+    /// before assuming it initialized.
+    ///
+    /// `&mut` from `&self` is the bump-allocator idiom (cf. `bumpalo::Bump::alloc`):
+    /// each call returns a *disjoint* fresh region, so the `&mut`s never alias.
+    #[inline]
+    #[allow(clippy::mut_from_ref)]
+    pub fn alloc_uninit<T>(&self) -> Result<&mut core::mem::MaybeUninit<T>, AllocError> {
+        let p = self.arena.alloc_uninit::<T>()?;
+        // SAFETY: `alloc_uninit` returns fresh, properly-aligned, non-aliasing
+        // storage for one `T`. Binding it to `&self` ties the reference to this
+        // scope; the borrow checker then prevents it from outliving the rewind
+        // in `Drop`, which reclaims exactly this memory. For a non-ZST `T` each
+        // call returns a disjoint region, so the `&mut`s never alias. For a ZST,
+        // every call yields the same dangling-but-aligned pointer, but a
+        // `&mut MaybeUninit<ZST>` accesses zero bytes — it claims no location
+        // exclusively, so the aliasing restriction is vacuously satisfied even
+        // when several coexist. (Verified under Miri in the `miri_targets`
+        // `alloc_uninit_and_scope_round_trip` ZST case.)
+        Ok(unsafe { &mut *p.cast::<core::mem::MaybeUninit<T>>().as_ptr() })
+    }
+
+    /// Raw byte scratch allocation bound to this scope — see
+    /// [`Allocator::allocate`]. The returned slice borrows the scope.
+    ///
+    /// `&mut` from `&self` is intentional (see [`alloc_uninit`](Self::alloc_uninit)):
+    /// each call returns a disjoint fresh region.
+    #[inline]
+    #[allow(clippy::mut_from_ref)]
+    pub fn allocate(&self, layout: NonZeroLayout) -> Result<&mut [u8], AllocError> {
+        let block = Allocator::allocate(&*self.arena, layout)?;
+        // SAFETY: fresh, non-aliasing bytes from the arena, bound to `&self`
+        // (this scope) so they cannot outlive the rewind. See `alloc_uninit`.
+        Ok(unsafe { &mut *block.as_ptr() })
+    }
+
+    /// Bytes currently allocated from the underlying arena (the absolute cursor,
+    /// not relative to this scope's mark). Useful in assertions/tests.
+    #[inline]
+    pub fn arena_allocated(&self) -> usize {
+        self.arena.allocated()
+    }
+
+    /// Open a nested scratch scope inside this one. The inner scope reclaims
+    /// only what *it* allocated when it drops; this outer scope is untouched.
+    #[inline]
+    pub fn scope(&mut self) -> Scope<'_, B> {
+        self.arena.scope()
+    }
+}
+
+impl<'a, B: FixedRange> Drop for Scope<'a, B> {
+    #[inline]
+    fn drop(&mut self) {
+        // Rewind to the mark, reclaiming everything the scope allocated. Runs on
+        // normal exit AND on a panic unwind, so a panicking scope body cannot
+        // leave the cursor advanced. Sound because `Drop` takes `&mut self`:
+        // every scope-issued reference borrows `&self`, so none can be alive
+        // here (the borrow checker enforces it), and no outer allocation
+        // occurred (the arena was mutably borrowed by this scope throughout).
+        self.arena.rewind_to(self.mark);
+    }
+}
 
 // ============================================================================
 // BumpDeallocator
@@ -475,6 +681,112 @@ mod tests {
         let _ = arena.allocate(l1).unwrap();
         let _ = arena.allocate(l1).unwrap();
         assert_eq!(arena.allocated(), 2);
+    }
+
+    #[test]
+    fn alloc_uninit_is_aligned_and_writable() {
+        let arena = BumpArena::new(InlineBacked::<256>::new()).unwrap();
+        // Force a misaligned starting cursor, then allocate an 8-aligned type.
+        let _pad = arena.alloc_uninit::<u8>().unwrap();
+        let p = arena.alloc_uninit::<u64>().unwrap();
+        assert_eq!(p.as_ptr() as usize % core::mem::align_of::<u64>(), 0);
+        unsafe {
+            p.as_ptr().write(0x0102_0304_0506_0708);
+            assert_eq!(p.as_ptr().read(), 0x0102_0304_0506_0708);
+        }
+    }
+
+    #[test]
+    fn alloc_uninit_zst_consumes_nothing_and_is_aligned() {
+        #[repr(align(16))]
+        struct Zst;
+        let arena = BumpArena::new(InlineBacked::<64>::new()).unwrap();
+        let before = arena.allocated();
+        let p = arena.alloc_uninit::<Zst>().unwrap();
+        assert_eq!(arena.allocated(), before, "ZST must consume no space");
+        assert_eq!(p.as_ptr() as usize % core::mem::align_of::<Zst>(), 0);
+    }
+
+    #[test]
+    fn alloc_uninit_reports_oom_like_allocate() {
+        let arena = BumpArena::new(InlineBacked::<8>::new()).unwrap();
+        // 8 bytes total; a u64 fits exactly once, the second must fail.
+        assert!(arena.alloc_uninit::<u64>().is_ok());
+        assert!(arena.alloc_uninit::<u64>().is_err());
+    }
+
+    #[test]
+    fn alloc_uninit_alignment_padding_counts_toward_exhaustion() {
+        // Push the cursor off an 8-aligned boundary with a 1-byte alloc, then a
+        // u64 needs to skip to offset 8 — its end (16) exceeds the 8-byte
+        // region, so it must OOM. This pins the alignment-rounding path (the
+        // bare OOM test above starts pre-aligned and wouldn't catch a broken
+        // mask).
+        let arena = BumpArena::new(InlineBacked::<8>::new()).unwrap();
+        let _b = arena.alloc_uninit::<u8>().unwrap(); // cursor = 1
+        assert!(
+            arena.alloc_uninit::<u64>().is_err(),
+            "u64 must not fit once alignment padding pushes its end past capacity"
+        );
+    }
+
+    #[test]
+    fn scope_rewinds_cursor_on_drop() {
+        let mut arena = BumpArena::new(InlineBacked::<256>::new()).unwrap();
+        let _keep = arena.alloc_uninit::<u32>().unwrap();
+        let before = arena.allocated();
+        {
+            let scope = arena.scope();
+            let _a = scope.alloc_uninit::<[u8; 32]>().unwrap();
+            let _b = scope.alloc_uninit::<[u8; 32]>().unwrap();
+            assert!(scope.arena_allocated() >= before + 64);
+        }
+        assert_eq!(arena.allocated(), before, "scope must rewind to its mark");
+        // The reclaimed region is reusable by the outer arena.
+        let _reuse = arena.alloc_uninit::<[u8; 32]>().unwrap();
+        assert_eq!(arena.allocated(), before + 32);
+    }
+
+    #[test]
+    fn nested_scopes_rewind_independently() {
+        let mut arena = BumpArena::new(InlineBacked::<512>::new()).unwrap();
+        let base = arena.allocated();
+        {
+            let mut outer = arena.scope();
+            let _o = outer.alloc_uninit::<[u8; 16]>().unwrap();
+            let after_outer = outer.arena_allocated();
+            {
+                let inner = outer.scope();
+                let _i = inner.alloc_uninit::<[u8; 64]>().unwrap();
+                assert!(inner.arena_allocated() >= after_outer + 64);
+            }
+            assert_eq!(
+                outer.arena_allocated(),
+                after_outer,
+                "inner scope rewinds to its own mark, leaving outer intact"
+            );
+        }
+        assert_eq!(arena.allocated(), base, "outer scope rewinds fully");
+    }
+
+    // Panic safety: a panic inside a scope body must still rewind (Drop runs on
+    // unwind). Needs std for catch_unwind.
+    #[cfg(feature = "std")]
+    #[test]
+    fn scope_rewinds_on_panic() {
+        let mut arena = BumpArena::new(InlineBacked::<256>::new()).unwrap();
+        let before = arena.allocated();
+        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let scope = arena.scope();
+            let _a = scope.alloc_uninit::<[u8; 64]>().unwrap();
+            panic!("boom inside scope");
+        }));
+        assert!(r.is_err(), "the panic should propagate out of catch_unwind");
+        assert_eq!(
+            arena.allocated(),
+            before,
+            "Drop must rewind the cursor even on a panic unwind"
+        );
     }
 
     // The `OsBacked` forward exists only for OS-managed backings, so this test

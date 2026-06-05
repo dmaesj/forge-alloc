@@ -35,7 +35,7 @@ mod size_classed;
 mod slab;
 mod stack_alloc;
 
-pub use bump::{BumpArena, BumpDeallocator};
+pub use bump::{BumpArena, BumpDeallocator, Scope};
 pub use fallback::WithFallback;
 pub use generational::{GenerationInt, GenerationalSlab, Handle};
 pub use size_classed::{SizeClassed, DEFAULT_CLASS_SIZES_8};

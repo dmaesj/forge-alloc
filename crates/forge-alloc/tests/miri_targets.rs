@@ -61,6 +61,49 @@ fn bump_inline_cursor_advance() {
     let _ = bump.allocate(layout).unwrap();
 }
 
+/// Exercises the typed `alloc_uninit` fast path and the `Scope` RAII checkpoint
+/// under miri's borrow tracker: the `&mut`-from-`&self` allocations, the cursor
+/// rewind on `Drop`, and reuse of the reclaimed region. This is the no-UB
+/// signal for the typed-alloc / scope code that the unit tests can't provide.
+#[test]
+fn alloc_uninit_and_scope_round_trip() {
+    let mut bump: BumpArena<InlineBacked<1024>> =
+        BumpArena::new(InlineBacked::<1024>::new()).unwrap();
+
+    // Typed alloc: write through the returned pointer (miri checks provenance).
+    let p = bump.alloc_uninit::<u64>().unwrap();
+    unsafe {
+        p.as_ptr().write(0xDEAD_BEEF);
+        assert_eq!(p.as_ptr().read(), 0xDEAD_BEEF);
+    }
+    let mark = bump.allocated();
+
+    // Scope: allocate scratch, write through scope-bound `&mut`s, then drop.
+    {
+        let scope = bump.scope();
+        let a = scope.alloc_uninit::<[u8; 32]>().unwrap();
+        let b = scope.alloc_uninit::<u32>().unwrap();
+        a.write([0xAB; 32]);
+        b.write(0x1234_5678);
+        assert_eq!(unsafe { a.assume_init_ref()[0] }, 0xAB);
+        assert_eq!(unsafe { b.assume_init_ref() }, &0x1234_5678);
+
+        // ZST through the scope: two `&mut MaybeUninit<ZST>` from the same
+        // dangling-but-aligned address coexist. Miri's borrow tracker must
+        // accept this (zero bytes accessed) — directly validates the ZST
+        // SAFETY note on `Scope::alloc_uninit`.
+        let z1 = scope.alloc_uninit::<()>().unwrap();
+        let z2 = scope.alloc_uninit::<()>().unwrap();
+        z1.write(());
+        z2.write(());
+    } // scope drops: cursor rewinds to `mark`
+
+    assert_eq!(bump.allocated(), mark, "scope must rewind under miri");
+    // The reclaimed region is reusable; miri must see no stale borrows.
+    let q = bump.alloc_uninit::<u64>().unwrap();
+    unsafe { q.as_ptr().write(1) };
+}
+
 /// `SharedBumpArena<InlineBacked<2048>>` — CAS-based bump.
 /// Single-threaded under miri (miri can spawn threads but the test
 /// stays deterministic to avoid stress on miri's borrow tracker).

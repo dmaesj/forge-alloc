@@ -24,3 +24,11 @@ incompatible_msrv = "warn"
 lto           = "thin"
 codegen-units = 1
 debug         = "line-tables-only"
+
+# Benchmarks compare optimized fast paths (e.g. the typed `alloc_uninit` vs the
+# runtime-`Layout` `allocate`); use fat LTO + a single codegen unit so a foreign
+# crate is never handicapped by missed cross-crate inlining and the numbers are
+# an honest reflection of the generated code.
+[profile.bench]
+lto           = "fat"
+codegen-units = 1

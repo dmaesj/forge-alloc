@@ -24,3 +24,6 @@ Thumbs.db
 .env
 .env.*
 *.pem
+
+# Browser automation session snapshots
+.playwright-cli/

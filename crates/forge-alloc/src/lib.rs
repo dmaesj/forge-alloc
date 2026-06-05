@@ -78,7 +78,7 @@ pub use backing::{
 
 #[doc(inline)]
 pub use layout::{
-    BumpArena, BumpDeallocator, GenerationInt, GenerationalSlab, Handle, SizeClassed, Slab,
+    BumpArena, BumpDeallocator, GenerationInt, GenerationalSlab, Handle, Scope, SizeClassed, Slab,
     StackAlloc, WithFallback, DEFAULT_CLASS_SIZES_8,
 };
 
