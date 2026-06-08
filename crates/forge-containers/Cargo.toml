@@ -1,0 +1,25 @@
+[package]
+name        = "forge-containers"
+version     = "0.1.0"
+description = "Container and interop primitives for the forge-alloc memory family — over-aligned, zero-copy-friendly data structures"
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+repository.workspace   = true
+readme      = "README.md"
+keywords    = ["memory", "buffer", "no-std", "arrow", "simd"]
+categories  = ["memory-management", "no-std", "data-structures"]
+
+[dependencies]
+# Shared core of the forge-alloc family — `AllocError` / `NonZeroLayout`. This
+# crate sits *beside* `forge-alloc` on the same core, not on top of it: its
+# container(s) own their memory directly today. A `forge-alloc` dependency will
+# be added when the first backing-parametric container lands.
+forge-alloc-core = { version = "0.2.3", path = "../forge-alloc-core", default-features = false }
+allocator-api2   = { version = "0.2", default-features = false, features = ["alloc"] }
+
+[lib]
+doctest = true
+
+[lints]
+workspace = true

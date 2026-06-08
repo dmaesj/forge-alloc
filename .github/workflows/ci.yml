@@ -71,6 +71,12 @@ jobs:
       - name: cargo check -p forge-alloc (no_std)
         run: cargo check -p forge-alloc --no-default-features --lib
 
+      # forge-containers is unconditionally `#![no_std]` (alloc only); it has no
+      # `std` feature, so `--no-default-features` is a no-op but keeps the form
+      # uniform with the other library crates above.
+      - name: cargo check -p forge-containers (no_std)
+        run: cargo check -p forge-containers --no-default-features --lib
+
       # forge-alloc-capi's `staticlib`/`cdylib` crate-types are FINAL artifacts
       # that demand their own #[panic_handler]/#[global_allocator], so a plain
       # `cargo check --lib` would fail. Override the crate-type to `rlib` — the
@@ -180,6 +186,12 @@ jobs:
         # thread tests are gated `#[cfg_attr(miri, ignore)]`.
         run: cargo +nightly miri test -p forge-alloc --test miri_targets --test nrvo_defeat
 
+      - name: miri test forge-containers
+        # Unlike forge-alloc, forge-containers' own unit tests are miri-safe
+        # (pure `alloc`, no mmap/syscalls), so run the lib tests directly —
+        # they exercise the unsafe pointer/provenance paths in AlignedColBuffer.
+        run: cargo +nightly miri test -p forge-containers
+
   # ----------------------------------------------------------------
   # Cross-compile smoke checks. `cargo check` (NOT test) against
   # non-host targets — verifies the code compiles for the target's
@@ -249,6 +261,11 @@ jobs:
         run: cargo check -p forge-alloc-core --no-default-features --target ${{ matrix.target }}
       - name: cargo check forge-alloc (--no-default-features)
         run: cargo check -p forge-alloc --no-default-features --target ${{ matrix.target }}
+      # forge-containers is alloc-only no_std; it must compile on bare-metal /
+      # wasm targets too. (`alloc` is available without a registered
+      # `#[global_allocator]` for a lib-only check.)
+      - name: cargo check forge-containers (--no-default-features)
+        run: cargo check -p forge-containers --no-default-features --target ${{ matrix.target }}
 
   # ----------------------------------------------------------------
   # Loom: c11 memory-model permutation testing on the concurrent
